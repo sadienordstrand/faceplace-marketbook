@@ -62,11 +62,9 @@ next.
 
 **If you already have Python,** it spends a couple of minutes installing what it
 needs and downloading the Chromium browser for itself, about 150 MB, then opens
-the search window. Every time after that it starts in a second or two.
+the search window. Every time after that, it'll start up in a second or two.
 
-**If you don't have Python,** it says so and shows you where to get it. Python
-is the language this app is written in — it's free, made by a non-profit, and
-safe to install. It's the only thing you need that can't live in this folder.
+**If you don't have Python,** it says so and shows you where to get it.
 Install it using the instructions below, then double-click the Start file
 again.
 
@@ -98,28 +96,20 @@ and some confusion about which is in charge.
 <summary><strong>If your computer won't open the Start file</strong></summary>
 
 Both systems block programs that aren't from an identified company, and this one
-isn't — signing software requires a paid Apple or Microsoft developer account.
-You allow it once and then it's remembered.
+isn't.
 
 **Windows** shows a blue "Windows protected your PC" box. Click **More info**,
 then **Run anyway**.
 
-**Mac** shows *"Apple could not verify ... is free of malware"*, offering only
-**Move to Trash** or **Done**. There's no "open anyway" in that box, and
-right-clicking the file doesn't help either — macOS removed that shortcut in
-2024. The button you need is in Settings:
+**Mac** shows *"Apple could not verify ... is free of malware"*. 
+The button you need is in Settings:
 
-1. Click **Done** to dismiss the box.
 2. Open **System Settings** → **Privacy & Security**.
 3. Scroll down to the **Security** section. You'll see a line saying
    `"Start Faceplace (Mac).command" was blocked to protect your Mac`, with an
    **Open Anyway** button next to it. Click it.
 4. Confirm with your password or Touch ID, and click **Open Anyway** again if
    asked.
-
-Double-clicking works from then on. If that line isn't there, it's because the
-button only appears for about an hour after a blocked attempt — double-click the
-Start file again, then go back and look.
 
 **Mac, alternative that always works:** you can run it from Terminal instead and
 skip Apple's permission entirely.
@@ -182,8 +172,8 @@ ignored, so `can am` also catches "Can-Am" and "CANAM".
 search from 1,925 listings down to 811. Listings with no price shown are kept
 either way.
 
-**Leave "Exact matching" off.** Tested head to head on the same city, it found
-nothing the normal search missed and threw away 34 genuine matches.
+**Leave "Exact matching" off.** When testing with and without "Exact matching" on the same city, 
+turning it on found nothing the normal search missed, and it threw away 34 genuine matches.
 
 ---
 
