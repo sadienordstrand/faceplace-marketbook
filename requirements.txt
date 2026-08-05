@@ -1,0 +1,3 @@
+# fb_marketplace_sweep.py has a single third-party dependency.
+# After installing, fetch the browser binary once:  playwright install chromium
+playwright>=1.40

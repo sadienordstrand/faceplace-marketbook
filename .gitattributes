@@ -1,0 +1,10 @@
+# Line endings must match the shell that runs each launcher, or it won't start.
+*.bat       text eol=crlf
+*.command   text eol=lf
+*.sh        text eol=lf
+
+# Everything else: normalize to LF in the repository.
+*.py        text
+*.md        text
+*.json      text
+*.txt       text

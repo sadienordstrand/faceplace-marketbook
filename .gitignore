@@ -1,0 +1,31 @@
+# Logged-in Facebook browser profile (contains session cookies) — never commit this.
+.fb_session/
+
+# Generated data / scraper output
+marketplace_results*.csv
+*.sqlite
+gallery.html
+
+# Per-run output folders (CSV, gallery, run.json, thumbnails)
+runs/
+
+# Note: locations.json is intentionally NOT ignored — it's small, hand-curated
+# config. Remove this note and add it above if you'd rather keep it private.
+
+# Downloaded thumbnails
+thumbs/
+
+# Raw Facebook payload dumps from --debug-dump
+debug/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# OS / editor cruft
+.DS_Store
+.idea/
+.vscode/
