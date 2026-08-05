@@ -255,6 +255,19 @@ Neither mechanism can defeat closing a laptop lid, which is a hardware-level
 sleep. `set_radius()` is deliberately not wrapped, since it exists to wait on a
 human.
 
+## Gatekeeper
+
+Every Mac user hits this once, and it isn't the usual quarantine problem — a
+`git clone`'d copy with no `com.apple.quarantine` attribute is blocked just the
+same, because the launcher is simply unsigned (`spctl` reports
+`no usable signature`). macOS 15 removed the Control-click → Open bypass for
+unsigned software, so the only routes are System Settings → Privacy & Security →
+**Open Anyway**, or running the script from Terminal, where Gatekeeper doesn't
+apply. Both are in the README.
+
+The only way to remove that friction is a paid Apple Developer account plus
+notarization, which is out of scope for a personal tool.
+
 ## Cross-platform notes
 
 - All paths are derived from the script's own location via `pathlib`, so the app

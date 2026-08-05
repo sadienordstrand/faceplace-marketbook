@@ -50,93 +50,92 @@ somewhere you'll find it again, like your Documents folder.
 Keep everything in that folder together. The app stores your searches and
 results inside it.
 
-### Step 2 — Install Python
-
-This app needs **Python 3.9 or newer**. Any version from 3.9 up works; if you're
-installing fresh, just take the latest.
-
-**You may already have it.** Macs come with Python, and lots of other software
-installs it. The simplest way to find out is to skip ahead and do Step 3 first:
-the app checks for you, and if Python is missing or too old it says so and gives
-you the download link. There's no harm in trying.
-
-<details>
-<summary>Or check by hand, if you'd rather</summary>
-
-**On Mac:** press Command-Space, type `Terminal`, press Return, then type this
-and press Return:
-
-```
-python3 --version
-```
-
-**On Windows:** press the Windows key, type `Command Prompt`, press Return, then
-type this and press Return:
-
-```
-py --version
-```
-
-Either way you want to see a number like `Python 3.12.4`. Anything 3.9 or higher
-is fine and you can skip to Step 3.
-
-If you get an error, or the Microsoft Store opens, or the number starts with
-`2.`, then you need to install it below.
-
-</details>
-
-**On Windows:** go to <https://www.python.org/downloads/windows/> and download
-the latest "Windows installer (64-bit)". Run it. On the very first screen,
-**tick the box that says "Add python.exe to PATH"** before clicking Install Now.
-
-**On Mac:** go to <https://www.python.org/downloads/macos/> and download the
-latest "macOS 64-bit universal2 installer". Open it and click through.
-
-Installing Python again when you already have it is usually harmless, but it can
-leave you with several versions and some confusion about which one is in charge,
-so it's worth the thirty seconds to check first.
-
-### Step 3 — Start it
+### Step 2 — Start it
 
 Open the folder and double-click the file for your computer:
 
 - **Windows:** `Start Faceplace (Windows).bat`
 - **Mac:** `Start Faceplace (Mac).command`
 
-The terminal will open and tell you what it's doing. The first time, it spends a
-couple of minutes installing what it needs and downloading the Chromium browser
-for itself, about 150 MB. Every time after that it starts in a second or two.
+A terminal window opens and tells you what it's doing. One of two things happens
+next.
 
-Everything it installs goes in a `.venv` folder inside the app's folder. Nothing
-is changed anywhere else on your computer, and deleting the app's folder removes
-all of it.
+**If you already have Python,** it spends a couple of minutes installing what it
+needs and downloading the Chromium browser for itself, about 150 MB, then opens
+the search window. Every time after that it starts in a second or two.
+
+**If you don't have Python,** it says so and shows you where to get it. Python
+is the language this app is written in — it's free, made by a non-profit, and
+safe to install. It's the only thing you need that can't live in this folder.
+Install it using the instructions below, then double-click the Start file
+again.
+
+Everything else it installs goes in a `.venv` folder inside the app's folder.
+Nothing is changed anywhere else on your computer, and deleting the app's folder
+removes all of it.
 
 <details>
-<summary><strong>If your computer refuses to open the file</strong></summary>
+<summary><strong>Installing Python, if it asks you to</strong></summary>
 
-Both systems are suspicious of files downloaded from the internet. This is
-normal and you only deal with it once.
+You need **version 3.9 or newer**. If you're installing fresh, just take the
+latest.
 
-**Windows** may show a blue "Windows protected your PC" box. Click **More
-info**, then **Run anyway**.
+**On Windows:** go to <https://www.python.org/downloads/windows/> and download
+the latest "Windows installer (64-bit)". Run it. On the very first screen,
+**tick the box that says "Add python.exe to PATH"** before clicking Install Now.
+That box matters — without it the app can't find Python.
 
-**Mac** may say the file "cannot be opened because it is from an unidentified
-developer". Right-click the file, choose **Open**, then click **Open** in the
-box that appears.
+**On Mac:** go to <https://www.python.org/downloads/macos/> and download the
+latest "macOS 64-bit universal2 installer". Open it and click through.
 
-**Mac, if double-clicking opens a text editor instead of running:** unzipping
-stripped the file's permission to run. To restore it:
-
-1. Press Command-Space, type `Terminal`, and press Return.
-2. Type `chmod +x` followed by a single space. Don't press Return yet.
-3. Drag `Start Faceplace (Mac).command` from your folder into the Terminal
-   window. It fills in the location for you.
-4. Press Return. Nothing appears to happen, which means it worked.
-5. Close Terminal. Double-clicking now works, permanently.
+Only install it if the app told you to. Installing a second copy when you
+already have one is usually harmless, but it can leave you with several versions
+and some confusion about which is in charge.
 
 </details>
 
-### Step 4 — Log into Facebook
+<details>
+<summary><strong>If your computer won't open the Start file</strong></summary>
+
+Both systems block programs that aren't from an identified company, and this one
+isn't — signing software requires a paid Apple or Microsoft developer account.
+You allow it once and then it's remembered.
+
+**Windows** shows a blue "Windows protected your PC" box. Click **More info**,
+then **Run anyway**.
+
+**Mac** shows *"Apple could not verify ... is free of malware"*, offering only
+**Move to Trash** or **Done**. There's no "open anyway" in that box, and
+right-clicking the file doesn't help either — macOS removed that shortcut in
+2024. The button you need is in Settings:
+
+1. Click **Done** to dismiss the box.
+2. Open **System Settings** → **Privacy & Security**.
+3. Scroll down to the **Security** section. You'll see a line saying
+   `"Start Faceplace (Mac).command" was blocked to protect your Mac`, with an
+   **Open Anyway** button next to it. Click it.
+4. Confirm with your password or Touch ID, and click **Open Anyway** again if
+   asked.
+
+Double-clicking works from then on. If that line isn't there, it's because the
+button only appears for about an hour after a blocked attempt — double-click the
+Start file again, then go back and look.
+
+**Mac, alternative that always works:** you can run it from Terminal instead and
+skip Apple's permission entirely.
+
+1. Press Command-Space, type `Terminal`, and press Return.
+2. Drag `Start Faceplace (Mac).command` from your folder into the Terminal
+   window. It fills in the location for you.
+3. Press Return.
+
+If that says `permission denied`, unzipping stripped the file's permission to
+run. Type `chmod +x` and a space, drag the file in again, press Return, and then
+repeat the steps above.
+
+</details>
+
+### Step 3 — Log into Facebook
 
 The first run opens a Facebook window and waits. Log in as you normally would,
 including any two-factor code or captcha. The app notices when you're through
