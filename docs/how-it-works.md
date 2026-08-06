@@ -280,6 +280,36 @@ the masthead and UI type. Offline, each falls back to a system face. To swap one
 edit the `--brandface` or `--type` variable at the top of the stylesheet in
 `build_gallery.py`.
 
+## Interrupts, and why Windows made them worse
+
+Ctrl-C during the description stage is supposed to stop the work and keep it:
+`retrieve_descriptions()` catches `KeyboardInterrupt`, returns `False`, and the
+run skips the remaining downloads and goes straight to the CSV and gallery. Each
+listing is already committed to SQLite as it finishes, so nothing is waiting in
+memory.
+
+On Windows that unravelled. A console sends `CTRL_C_EVENT` to *every* process
+attached to it, and Playwright's driver is a separate `node.exe` sharing that
+console — so the driver dies at the same instant Python raises the exception.
+The `finally` block then called `page.unroute()` on a connection that no longer
+existed, and that exception propagated out in place of the clean return, past
+`finished = ...`, out of `run()`, and the CSV and gallery were never written.
+The user saw "Everything gathered so far is saved" printed immediately before
+the run died.
+
+So every teardown call that talks to the browser after an interrupt is now
+wrapped: `page.unroute()` and `ctx.close()`. The route handler installed for the
+stage swallows its own failures too, since a request still in flight when the
+page navigates away can't be answered and shouldn't be able to surface as a
+stalled page. None of these can fail usefully — the browser is being discarded
+either way.
+
+Worth knowing when reading a "it just froze" report on Windows: selecting text
+in a console window suspends the process at its next write to stdout, which
+looks identical to a hang, browser included, because the process driving the
+browser is stopped. `Esc` releases it. `main()` also forces line buffering on
+stdout so a working run can't be mistaken for a stalled one.
+
 ## Keeping the machine awake
 
 A sleeping laptop drops the browser connection, which costs whatever hasn't been

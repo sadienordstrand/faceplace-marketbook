@@ -137,22 +137,11 @@ while. If it ever asks again, just log in again.
 ### Step 4 — Set your search radius
 
 Once you're logged in, the app loads Marketplace and then **stops and waits for
-you** before searching anything. The terminal tells you what to do; the reason
-it waits is this:
+you** before searching anything.
 
-**Facebook gives every account a 250-mile search radius by default, and this
-needs 500.** The radius belongs to your Facebook account, not to this app, so
-it's not something the app can set for you. At 250 miles the twelve cities
-cover about a quarter of the country, and you'd never know — you'd just get
-fewer results and no error.
-
-So in the browser window, click the location control in the left sidebar and
+In the browser window, click the location control in the left sidebar and
 set the distance to **500 miles**. While you're in there, dismiss any Facebook
 notification popups. Then come back to the terminal and press **Enter**.
-
-The terminal prints the radius it can see, so you don't have to guess whether
-you got it right. It's an account setting and it sticks, so once you've done
-this you can press Enter straight past it on future runs.
 
 ---
 
@@ -193,30 +182,29 @@ ignored, so `can am` also catches "Can-Am" and "CANAM".
 search from 1,925 listings down to 811. Listings with no price shown are kept
 either way.
 
-**Leave "Exact matching" off.** When testing with and without "Exact matching" on the same city, 
-turning it on found nothing the normal search missed, and it threw away 34 genuine matches.
+**Leave "Exact matching" off.** When testing with and without "Exact matching"
+on the same city, turning it on found nothing the normal search missed, and it
+threw away 34 genuine matches.
 
 ### Adding your own cities
 
 The twelve cities that come with it are spaced so their 500-mile circles cover
 the continental US, so for a nationwide search you don't need to add anything.
-Adding cities is for when you want somewhere covered more densely, or you're
-searching outside the US.
+But if you want to add your own city to search, you can do that.
 
-Facebook identifies a Marketplace city by a short name buried in its web
+Facebook identifies a Marketplace city by a string buried in its web
 address. To get it:
 
 1. Open **facebook.com/marketplace** in your ordinary browser.
-2. Click the location button near the top left — it shows whichever city you're
-   currently browsing.
-3. Type the city you want, pick it from the list, and click Apply.
-4. Copy the whole web address from the address bar.
+2. Click the location, type the city you want, pick it from the dropdown, and
+   click Apply.
+3. Copy the whole web address from the address bar.
 
-Paste that into the box at the bottom of the **Cities** section, give it a name,
-and click **Add city**. The app pulls out the part it needs and tells you if the
-link isn't one it can use. Cities you add are saved and will be there next time.
-To get rid of one, hover over it and click the **✕**, then click again to
-confirm.
+Paste that into the box at the bottom of the **Cities** section, give it a name
+(like "City, ST") and click **Add city**. The app pulls out the part it needs
+and tells you if the link isn't one it can use. Cities you add are saved and
+will be there next time. To get rid of one, hover over it and click the **✕**,
+then click again to confirm.
 
 ---
 
@@ -255,7 +243,7 @@ straight to building your gallery.
 When it finishes, your gallery opens in your browser automatically.
 
 Everything from the run lands in a new folder inside `runs/`, named for your
-search and the date, like `runs/defender_110_08-05-2026/`. Run the same search
+search and the date, like `runs/my_search_08-05-2026/`. Run the same search
 twice in a day and the second becomes `..._1`. Nothing is ever overwritten. In
 each folder:
 
@@ -285,6 +273,18 @@ window and start again.
 
 **It asks me to log into Facebook again.** The saved session expired, or
 Facebook wants to re-check. Just log in again.
+
+**Everything froze — nothing moving in the terminal or the browser.** On
+Windows, **click on the terminal window and press `Esc`.** This fixes it far
+more often than you'd expect: clicking or dragging inside a Windows terminal
+selects text, and selecting text *pauses the program* until you press `Esc`. It
+looks exactly like a crash and it isn't one. To stop it happening again,
+right-click the window's title bar, choose **Properties**, and untick
+**QuickEdit Mode**.
+
+If `Esc` doesn't start it moving within a few seconds, note the last line the
+terminal printed before quitting — that line says which listing it was on, and
+it's the one useful piece of information for working out what happened.
 
 **Hardly any results, or none.** Usually the search term is too specific, or the
 excluded terms are too broad. Try fewer words. The other likely cause is the

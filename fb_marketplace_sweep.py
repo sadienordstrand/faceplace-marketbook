@@ -1023,11 +1023,18 @@ def run(query, scrolls, exact, out_csv=None, only=None, keep_all=False,
                 interrupted = not finished
 
         if do_thumbs and rows and not interrupted:
-            fetch_thumbs(ctx, rows, thumbs_path)
+            try:
+                fetch_thumbs(ctx, rows, thumbs_path)
+            except KeyboardInterrupt:
+                interrupted = True
+                print("\n  Interrupted. Keeping the photos already downloaded.")
             for r in rows:
                 upsert(con, r)
             con.commit()
-        ctx.close()
+        try:
+            ctx.close()
+        except Exception:
+            pass
     con.close()
     write_csv(rows, out_path)
     print(f"\nWrote {out_path} and {DB_PATH}")
@@ -1194,9 +1201,20 @@ def retrieve_descriptions(ctx, page, targets, thumbs_path=None, debug_dump=False
     # Only the JSON payload matters here, so drop the photo/video/font requests
     # each detail page would otherwise pull. Routed on the page, not the
     # context, so the thumbnail fetches below still go through.
-    page.route("**/*", lambda route: route.abort()
-               if route.request.resource_type in ("image", "media", "font")
-               else route.continue_())
+    def block_heavy_requests(route):
+        # Every request on the page round-trips through here, and a request
+        # still in flight when the page navigates away can no longer be
+        # answered. Letting that raise would surface as a stalled page rather
+        # than a dropped request, so failures here are swallowed by design.
+        try:
+            if route.request.resource_type in ("image", "media", "font"):
+                route.abort()
+            else:
+                route.continue_()
+        except Exception:
+            pass
+
+    page.route("**/*", block_heavy_requests)
     got, saved, spent = 0, 0, []
     interrupted = False
     try:
@@ -1248,7 +1266,15 @@ def retrieve_descriptions(ctx, page, targets, thumbs_path=None, debug_dump=False
         print(f"\n  Interrupted after {len(spent)} of {len(targets)} listings. "
               "Everything gathered so far is saved; finishing up the outputs.")
     finally:
-        page.unroute("**/*")
+        # A Windows console sends Ctrl-C to every process sharing it, which
+        # includes Playwright's driver, so by the time we get here the browser
+        # may already be gone and this raises. That exception would replace the
+        # clean return above and take the whole run with it — losing the CSV and
+        # gallery for work that was already done and saved.
+        try:
+            page.unroute("**/*")
+        except Exception:
+            pass
     avg = sum(spent) / len(spent) if spent else 0
     print(f"  {got}/{len(spent) if interrupted else len(targets)} descriptions"
           + (f", {saved} photos saved" if thumbs_path else "")
@@ -1436,6 +1462,14 @@ def run_from_ui(a):
 
 
 def main():
+    # The terminal is the only progress indicator during a run that lasts
+    # hours, so it must never sit in a buffer. Python line-buffers a console
+    # already; this covers the cases where it doesn't and silence would read as
+    # a hang.
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+    except Exception:
+        pass
     ap = argparse.ArgumentParser(
         description="Personal-use FB Marketplace sweep. A plain --query run does "
                     "everything: sweep, descriptions, thumbnails, gallery.")
