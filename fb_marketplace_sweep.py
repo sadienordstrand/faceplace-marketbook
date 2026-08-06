@@ -1198,6 +1198,18 @@ def retrieve_descriptions(ctx, page, targets, thumbs_path=None, debug_dump=False
           "(--limit / --match narrow it; --pace changes the throttle.)")
     if debug_dump:
         DEBUG_DIR.mkdir(exist_ok=True)
+    # Park the page somewhere inert before touching routing. We arrive here
+    # sitting on the last city's search feed, which has been scrolled dozens of
+    # times and is still streaming images and GraphQL for thousands of cards.
+    # Turning on interception makes every one of those in-flight requests
+    # round-trip to Python, and on Windows — where the driver connection is
+    # slower — that backlog is enough to wedge the route call itself before the
+    # first listing is ever fetched. about:blank drops the whole feed first.
+    try:
+        page.goto("about:blank", wait_until="domcontentloaded")
+    except Exception:
+        pass
+
     # Only the JSON payload matters here, so drop the photo/video/font requests
     # each detail page would otherwise pull. Routed on the page, not the
     # context, so the thumbnail fetches below still go through.
