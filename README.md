@@ -274,18 +274,6 @@ window and start again.
 **It asks me to log into Facebook again.** The saved session expired, or
 Facebook wants to re-check. Just log in again.
 
-**Everything froze — nothing moving in the terminal or the browser.** On
-Windows, **click on the terminal window and press `Esc`.** This fixes it far
-more often than you'd expect: clicking or dragging inside a Windows terminal
-selects text, and selecting text *pauses the program* until you press `Esc`. It
-looks exactly like a crash and it isn't one. To stop it happening again,
-right-click the window's title bar, choose **Properties**, and untick
-**QuickEdit Mode**.
-
-If `Esc` doesn't start it moving within a few seconds, note the last line the
-terminal printed before quitting — that line says which listing it was on, and
-it's the one useful piece of information for working out what happened.
-
 **Hardly any results, or none.** Usually the search term is too specific, or the
 excluded terms are too broad. Try fewer words. The other likely cause is the
 search radius: if the app reported less than 500 miles at the pause before the
