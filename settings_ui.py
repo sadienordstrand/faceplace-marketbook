@@ -109,6 +109,31 @@ CSS = """
   .seg button:hover:not([aria-pressed="true"]) { background: var(--card-hi); color: var(--ink); }
 
   .cities { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .cities .tog { padding-right: 6px; }
+  .tog .lbl { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .tog-x {
+    flex: none; background: none; border: 0; cursor: pointer; color: var(--ink-soft);
+    font: 10pt var(--type); letter-spacing: .1em; padding: 3px 6px; border-radius: 2px;
+    opacity: 0; transition: opacity .12s;
+  }
+  .tog:hover .tog-x, .tog-x:focus { opacity: 1; }
+  .tog-x:hover { color: #241608; background: var(--accent); }
+  .tog-x[data-confirm] { opacity: 1; color: var(--accent); }
+
+  .addcity { display: flex; gap: 10px; margin-top: 14px; align-items: stretch; }
+  .addcity input { flex: 1; min-width: 0; }
+  .addcity input:first-child { flex: 0 0 190px; }
+  .addcity .mini { flex: none; padding-left: 18px; padding-right: 18px; }
+  .addcity-msg { margin-top: 8px; }
+  .addcity-msg.bad { color: var(--accent); }
+  details.help { margin-top: 12px; }
+  details.help summary {
+    cursor: pointer; color: var(--accent); font: 10pt var(--type);
+    letter-spacing: .12em; text-transform: uppercase;
+  }
+  details.help .hint { margin-top: 10px; }
+  details.help ol { margin: 8px 0 0; padding-left: 20px; }
+  details.help li { margin-bottom: 6px; }
   .mini {
     background: none; border: 1px solid rgba(237,146,107,.45); color: var(--accent);
     border-radius: 2px; padding: 5px 11px; cursor: pointer;
@@ -117,7 +142,7 @@ CSS = """
   .mini:hover { background: var(--accent); color: #241608; }
   .seclab { display: flex; align-items: center; justify-content: space-between; }
   .seclab .grp { display: flex; gap: 7px; margin-bottom: 14px; }
-  #hiddenWhenNoEnrich[hidden] { display: none; }
+  #hiddenWhenNoDescriptions[hidden] { display: none; }
 
   footer {
     position: fixed; bottom: 0; left: 0; right: 0; background: var(--olive);
@@ -199,6 +224,35 @@ HTML = """<!doctype html>
       radius around each selected city. Select all cities to get search results
       from the entire continental US.</div>
     <div class="cities" id="cities"></div>
+
+    <div class="addcity">
+      <input type="text" id="new_city_label" placeholder="Denver, CO">
+      <input type="text" id="new_city_url"
+             placeholder="paste the Marketplace link for that city">
+      <button class="mini" id="addCity">Add city</button>
+    </div>
+    <div class="hint addcity-msg" id="addCityMsg">Cities you add are saved for
+      next time. Hover a city to remove it.</div>
+
+    <details class="help">
+      <summary>How to get a city's link</summary>
+      <div class="hint">
+        <ol>
+          <li>Open <b>facebook.com/marketplace</b> in your browser.</li>
+          <li>Click the location button near the top left — it shows whatever
+            city you're currently browsing.</li>
+          <li>Type the city you want, pick it from the list, set the radius to
+            <b>500 miles</b>, and click Apply.</li>
+          <li>Copy the whole web address out of the address bar and paste it in
+            the box above. It looks like
+            <b>facebook.com/marketplace/denver/...</b> — the part right after
+            "marketplace" is what this needs, and it's fine if it's a long
+            number instead of a name.</li>
+        </ol>
+        <p style="margin: 10px 0 0">Leave the name box blank and it'll name the
+          city after that link.</p>
+      </div>
+    </details>
   </section>
 
   <section>
@@ -219,7 +273,7 @@ HTML = """<!doctype html>
   <section>
     <h2>Stages</h2>
     <div class="toggles">
-      <div class="tog" id="do_enrich" role="button" tabindex="0" aria-pressed="true">
+      <div class="tog" id="do_descriptions" role="button" tabindex="0" aria-pressed="true">
         <span class="box">✓</span>Retrieve Descriptions
       </div>
       <div class="tog" id="do_thumbs" role="button" tabindex="0" aria-pressed="true">
@@ -239,7 +293,7 @@ HTML = """<!doctype html>
       roughly 8 MB per city — so leave it off normally.</div>
   </section>
 
-  <section id="enrichBlock">
+  <section id="descBlock">
     <h2>Description Retrieval</h2>
     <div class="lab">Retrieval pace</div>
     <div class="seg" id="pace"></div>
@@ -253,7 +307,7 @@ HTML = """<!doctype html>
           matches and leaves the rest with just their card details.</div>
       </label> 
       <label class="field"><span class="lab">Ask above (minutes, blank = never)</span>
-        <input type="number" id="enrich_budget" value="__BUDGET__"
+        <input type="number" id="descriptions_budget" value="__BUDGET__"
                placeholder="never ask" min="0">
         <div class="hint">If retrieving descriptions for all listings would take
           longer than this many minutes, the run pauses in the terminal and
@@ -286,12 +340,75 @@ const secsPer = (p, withThumbs) =>
 
 // Cities
 const cityWrap = $('cities');
-LOCATIONS.forEach((label, i) => {
-  const d = document.createElement('div');
-  d.className = 'tog'; d.dataset.city = label; d.setAttribute('role', 'button');
-  d.tabIndex = 0; d.setAttribute('aria-pressed', 'true');
-  d.innerHTML = `<span class="box">✓</span>${label}`;
-  cityWrap.appendChild(d);
+const escHtml = s => String(s).replace(/[&<>"]/g,
+  m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
+
+function renderCities(labels, selected) {
+  // `selected` is a Set when we're re-rendering after an add or remove, so a
+  // change to the list doesn't quietly re-check cities the user turned off.
+  cityWrap.innerHTML = '';
+  labels.forEach(label => {
+    const d = document.createElement('div');
+    d.className = 'tog'; d.dataset.city = label; d.setAttribute('role', 'button');
+    d.tabIndex = 0;
+    d.setAttribute('aria-pressed', !selected || selected.has(label) ? 'true' : 'false');
+    d.innerHTML = `<span class="box">✓</span><span class="lbl">${escHtml(label)}</span>`
+      + `<button class="tog-x" title="Remove this city">✕</button>`;
+    cityWrap.appendChild(d);
+  });
+}
+const selectedCities = () => new Set([...cityWrap.querySelectorAll('.tog')]
+  .filter(t => t.getAttribute('aria-pressed') === 'true')
+  .map(t => t.dataset.city));
+renderCities(LOCATIONS);
+
+function sayCity(msg, bad) {
+  const el = $('addCityMsg');
+  el.textContent = msg;
+  el.classList.toggle('bad', !!bad);
+}
+
+$('addCity').onclick = async () => {
+  const btn = $('addCity'), label = $('new_city_label').value.trim();
+  const url = $('new_city_url').value.trim();
+  btn.disabled = true;
+  sayCity('Adding…');
+  const res = await window.pyAddCity(label, url);
+  btn.disabled = false;
+  if (res.error) { sayCity(res.error, true); return; }
+  const keep = selectedCities();
+  res.cities.filter(c => !LOCATIONS.includes(c)).forEach(c => keep.add(c));
+  LOCATIONS.length = 0; LOCATIONS.push(...res.cities);
+  renderCities(res.cities, keep);
+  $('new_city_label').value = ''; $('new_city_url').value = '';
+  sayCity(`Added ${res.added}. It'll be here next time too.`);
+  refresh();
+};
+['new_city_label', 'new_city_url'].forEach(id =>
+  $(id).addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); $('addCity').click(); }
+  }));
+
+// Removing edits locations.json on disk, so it asks for a second click rather
+// than deleting a city out from under a stray cursor.
+cityWrap.addEventListener('click', async e => {
+  const x = e.target.closest('.tog-x');
+  if (!x) return;
+  e.stopPropagation();
+  const label = x.closest('.tog').dataset.city;
+  if (!x.dataset.confirm) {
+    cityWrap.querySelectorAll('.tog-x[data-confirm]').forEach(o => {
+      delete o.dataset.confirm; o.textContent = '✕';
+    });
+    x.dataset.confirm = '1'; x.textContent = 'Remove?';
+    return;
+  }
+  const res = await window.pyRemoveCity(label);
+  const keep = selectedCities(); keep.delete(label);
+  LOCATIONS.length = 0; LOCATIONS.push(...res.cities);
+  renderCities(res.cities, keep);
+  sayCity(`Removed ${label}.`);
+  refresh();
 });
 $('allCities').onclick = () => {
   cityWrap.querySelectorAll('.tog').forEach(t => t.setAttribute('aria-pressed', 'true'));
@@ -339,13 +456,13 @@ function collect() {
     min_price: num('min_price'),
     max_price: num('max_price'),
     exclude: $('exclude').value.trim(),
-    do_enrich: on('do_enrich'),
+    do_descriptions: on('do_descriptions'),
     do_thumbs: on('do_thumbs'),
     do_gallery: on('do_gallery'),
     debug_dump: on('debug_dump'),
     pace: pace,
     limit: num('limit'),
-    enrich_budget: num('enrich_budget'),
+    descriptions_budget: num('descriptions_budget'),
   };
 }
 
@@ -357,9 +474,9 @@ function refresh() {
     b.textContent = `${b.dataset.pace} (${s}s per listing)`;
   });
   // The whole block is meaningless with description retrieval off.
-  $('enrichBlock').hidden = !c.do_enrich;
+  $('descBlock').hidden = !c.do_descriptions;
   const parts = [`<b>${c.cities.length}</b> ${c.cities.length === 1 ? 'city' : 'cities'}`];
-  if (c.do_enrich) {
+  if (c.do_descriptions) {
     parts.push(`<b>${Math.round(secsPer(pace, c.do_thumbs))}s</b> per listing`);
     parts.push(c.limit ? `<b>${c.limit}</b> max` : `<b>all</b> listings`);
   } else parts.push('no descriptions');
@@ -369,7 +486,7 @@ function refresh() {
 }
 
 $('query').addEventListener('input', refresh);
-['min_price','max_price','exclude','limit','enrich_budget']
+['min_price','max_price','exclude','limit','descriptions_budget']
   .forEach(id => $(id).addEventListener('input', refresh));
 
 $('start').onclick = () => { $('start').disabled = true; window.pySubmit(collect()); };
@@ -391,7 +508,7 @@ $('query').focus();
 def render(locations, paces, defaults):
     defaults = dict(defaults or {})
     # 0 / None means "never ask", which the form shows as an empty field.
-    budget = defaults.get("enrich_budget") or ""
+    budget = defaults.get("descriptions_budget") or ""
     return (HTML
             .replace("__FONTS__", FONTS)
             .replace("__CSS__", CSS)
@@ -401,13 +518,41 @@ def render(locations, paces, defaults):
             .replace("__DEFAULTS__", json.dumps(defaults)))
 
 
-def collect_settings(locations, paces, defaults=None, headless=False):
+def collect_settings(locations, paces, defaults=None, headless=False,
+                     on_add=None, on_remove=None):
     """Opens the settings window and blocks until Start or Cancel.
+
+    `on_add(label, text)` should return (labels, error) and `on_remove(label)`
+    a list of labels; both persist the change. Without them the city list is
+    read-only.
 
     Returns the settings dict, or None if cancelled or the window was closed.
     """
     html = render(locations, paces, defaults)
     state = {}
+    known = list(locations)
+
+    def add_city(label, text):
+        if not on_add:
+            return {"error": "Adding cities isn't available here."}
+        try:
+            labels, error = on_add(label, text)
+        except Exception as e:
+            return {"error": f"Couldn't save that: {e}"}
+        if error:
+            return {"error": error}
+        labels = list(labels)
+        added = next((c for c in labels if c not in known), label)
+        known[:] = labels
+        return {"cities": labels, "added": added}
+
+    def remove_city(label):
+        try:
+            known[:] = list(on_remove(label)) if on_remove else known
+        except Exception:
+            pass
+        return {"cities": list(known)}
+
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=headless,
                                     args=["--window-size=1000,1120"])
@@ -416,6 +561,8 @@ def collect_settings(locations, paces, defaults=None, headless=False):
                                 no_viewport=not headless)
         page.expose_function("pySubmit", lambda data: state.update(done=True, data=data))
         page.expose_function("pyCancel", lambda: state.update(done=True, data=None))
+        page.expose_function("pyAddCity", add_city)
+        page.expose_function("pyRemoveCity", remove_city)
         page.set_content(html)
         try:
             while not state.get("done"):

@@ -5,13 +5,14 @@ Internals, command-line usage, and the measurements behind the advice in the
 
 ## Layout
 
-- `fb_marketplace_sweep.py` — sweep, enrich, thumbnails, and the pipeline that
-  runs them in order.
+- `fb_marketplace_sweep.py` — sweep, description retrieval, thumbnails, and the
+  pipeline that runs them in order.
 - `settings_ui.py` — the pre-flight settings window. It's HTML rendered in a
   Playwright window, so there's nothing extra to install and it matches the
   gallery's styling.
 - `build_gallery.py` — turns a results CSV into a browsable `gallery.html`.
-- `locations.json` — hand-curated `label -> search segment` map.
+- `locations.json` — `label -> search segment` map. Seeded by hand; the
+  settings window appends to it when you add a city.
 - `Start Faceplace (Mac).command` / `(Windows).bat` — double-click launchers.
   They find Python, build `.venv`, install `requirements.txt`, fetch Chromium,
   and run the app. All work is stamped so repeat runs skip straight through.
@@ -61,7 +62,18 @@ https://www.facebook.com/marketplace/108173265878171/search/?query=...
 ```
 
 Then `--import-urls locations_urls.txt` parses them into `locations.json`. A
-slug like `dallas` and a numeric id both work.
+slug like `dallas` and a numeric id both work. Note that `--import-urls`
+*replaces* the file.
+
+The settings window can append instead, which is the path most people use.
+`parse_location()` takes whatever was pasted — a full search URL, a bare
+`/marketplace/<seg>` URL, or just the segment — and pulls out the segment,
+rejecting the feature URLs people grab by mistake (`/marketplace/item/...`,
+`/marketplace/you/...`, `/marketplace/category/...`) rather than silently saving
+a "city" that returns nothing. `add_location()` also refuses duplicate labels
+and duplicate segments, naming the existing entry so the collision is obvious.
+Adds and removes are written to `locations.json` immediately, not at Start, so
+they survive cancelling the window.
 
 ### Options
 
@@ -74,39 +86,46 @@ slug like `dallas` and a numeric id both work.
 | `--only LABEL` | Run only locations whose label contains `LABEL`. |
 | `--exclude TERMS` | Comma-separated terms to reject, ignoring case, spaces, and punctuation. |
 | `--min-price N` / `--max-price N` | Price bounds in dollars, applied server-side and locally. |
-| `--enrich-budget MIN` | Ask before enriching longer than `MIN` minutes. Default `0`, which never asks. |
-| `--yes` | Don't ask about long enrichment jobs. |
+| `--descriptions-budget MIN` | Ask before retrieving descriptions would take longer than `MIN` minutes. Default `0`, which never asks. |
+| `--yes` | Don't ask about long description jobs. |
+| `--no-pause` | Skip the post-login pause for popups and the radius. |
 | `--no-open` | Don't open the finished gallery in a browser. |
 | `--set-radius` | Open Marketplace to check or restore the account search radius. |
-| `--match TERM` | Only enrich listings whose title contains `TERM`. |
-| `--limit N` | Only enrich the first `N` listings. |
+| `--match TERM` | Only describe listings whose title contains `TERM`. |
+| `--limit N` | Only retrieve descriptions for the first `N` listings. |
 | `--thumbs-dir DIR` | Thumbnail folder (default: `thumbs`). |
-| `--pace NAME` | Pause between detail-page hits while enriching: `fast` (1-2.5s, ~7s per listing, default) or `slow` (3-5s, ~9s). |
+| `--pace NAME` | Pause between detail-page hits while retrieving descriptions: `fast` (1-2.5s, ~7s per listing, default) or `slow` (3-5s, ~9s). |
 | `--scrolls N` | Max scrolls per city — a safety ceiling only; the sweep normally stops much sooner, after 3 scrolls with no new matches. Default `60`. |
 | `--exact` | Ask Facebook for tight matching (default is loose). |
 | `--keep-all` | Keep filler/non-matching listings instead of dropping them (flagged in `source_section` / `matches_query`). |
-| `--no-enrich` / `--no-thumbs` / `--no-gallery` | Skip that stage. |
+| `--no-descriptions` / `--no-thumbs` / `--no-gallery` | Skip that stage. |
 | `--debug-dump` | Save raw Facebook JSON payloads to `debug/` for troubleshooting extraction. |
-| `--enrich CSV` | One-off: enrich an existing CSV instead of running a sweep. |
+| `--descriptions CSV` | One-off: retrieve descriptions for an existing CSV instead of running a sweep. |
 | `--download-thumbs CSV` | One-off: download the image URLs in an existing CSV. |
+
+The stage formerly called "enrich" is now "retrieve descriptions" throughout.
+`--enrich`, `--no-enrich`, and `--enrich-budget` still work as undocumented
+aliases so older notes and scripts don't break.
 
 ## The four stages
 
 1. **Sweep** — visit each saved location and scroll its results, filtering as it
    goes and stopping once three scrolls in a row turn up nothing that could pass
    the filters (see [How deep it scrolls](#how-deep-it-scrolls)).
-2. **Enrich** — visit each kept listing's detail page *once* for the seller's
-   description and full-size photo. Each listing is written to the database the
-   moment it's done, and Ctrl-C stops the work without discarding it: the run
-   skips the remaining downloads and goes straight to the CSV and gallery.
-3. **Thumbnails** — save every image locally. The enrich stage stores each photo
-   the moment it reads the URL, so nothing expires mid-run; anything already on
-   disk is reused.
+2. **Retrieve descriptions** — visit each kept listing's detail page *once* for
+   the seller's description and full-size photo. Each listing is written to the
+   database the moment it's done, and Ctrl-C stops the work without discarding
+   it: the run skips the remaining downloads and goes straight to the CSV and
+   gallery.
+3. **Thumbnails** — save every image locally. The description stage stores each
+   photo the moment it reads the URL, so nothing expires mid-run; anything
+   already on disk is reused.
 4. **Gallery** — write `gallery.html` and open it in a browser.
 
 Each detail page is visited at most once per run and each image downloaded at
-most once: results from every city are merged by listing id *before* the enrich
-and thumbnail stages, so overlapping city radii never cause duplicate work.
+most once: results from every city are merged by listing id *before* the
+description and thumbnail stages, so overlapping city radii never cause
+duplicate work.
 
 ## How extraction works
 
@@ -142,9 +161,9 @@ In order of how much junk they remove:
 - **Query words** are required by default: 3+ letter words, matched at word
   starts, so "defender" catches "Defenders" but "van" won't match "advantage".
 - **Numbers in the query rank rather than filter.** Sellers often omit them, so
-  a "110" isn't required — but listings that have it are enriched first, along
+  a "110" isn't required — but listings that have it are described first, along
   with those whose titles contain every query word. An interrupted or capped
-  enrich run therefore spends its time on the best candidates.
+  description run therefore spends its time on the best candidates.
 
 ### Why `--exact` is off by default
 
@@ -157,10 +176,22 @@ and an $86,992 2025. It's a fast reconnaissance mode, not a better one.
 ## Search radius
 
 The radius is an **account-level Marketplace setting**, not a URL parameter —
-none of the obvious URL spellings affect it. Every sweep prints the radius it
-found and warns if it's under 500 miles, since the saved cities are spaced so
-that a 500-mile circle around each tiles the continental US. If it gets reset,
-coverage develops holes; `--set-radius` opens the UI and waits while you fix it.
+none of the obvious URL spellings affect it. It defaults to 250 miles, and the
+saved cities are spaced assuming 500, so a fresh account quietly searches about
+a quarter of the intended area. This failure is invisible: no error, just fewer
+results.
+
+So `preflight_pause()` runs between login and the first city. It loads the first
+search URL, reads the radius out of the page's own `filter_radius_km` payload,
+prints it, and blocks on `input()` while you fix the radius and dismiss any
+popups. It re-reads the radius afterwards, so the value recorded in `run.json`
+is the one actually used. `--no-pause` skips it (the radius is still read and
+printed), `EOFError` is caught so a non-interactive run continues rather than
+crashing, and Ctrl-C at the prompt exits cleanly instead of tracebacking.
+
+This is the same problem `--set-radius` was for; that flag still exists, but the
+pause covers the case that actually bit people, which was not knowing there was
+a radius to check.
 
 A side effect worth knowing: at 500 miles almost nothing is "outside your
 search", so Facebook's out-of-radius divider rarely appears (1 city in 12 on a
@@ -198,18 +229,19 @@ Each city reports where it stopped and why, and `run.json` records it under
 
 ## Pacing
 
-Enrichment is the slow stage, and most of its cost is a deliberate randomized
-pause between detail-page hits — the one knob that trades runtime against how
-machine-like the traffic looks. `--pace fast` (default) waits 1-2.5s, landing
-near 7s per listing; `--pace slow` waits 3-5s for about 9s.
+Retrieving descriptions is the slow stage, and most of its cost is a deliberate
+randomized pause between detail-page hits — the one knob that trades runtime
+against how machine-like the traffic looks. `--pace fast` (default) waits
+1-2.5s, landing near 7s per listing; `--pace slow` waits 3-5s for about 9s.
 
 Neither can go below the fixed per-listing cost: ~3.5s to load a detail page and
 read its payload, plus ~1.5s to fetch and store the photo when thumbnails are
 on. That floor is why "fast" saves less than the pause numbers suggest.
 
-The estimate is always printed before enrichment starts. `--enrich-budget MIN`
-makes anything longer than that stop and offer the top N by relevance, all of
-them, or none. It's `0` by default, which never asks.
+The estimate is always printed before the stage starts.
+`--descriptions-budget MIN` makes anything longer than that stop and offer the
+top N by relevance, all of them, or none. It's `0` by default, which never
+asks.
 
 ## The gallery
 
@@ -226,8 +258,15 @@ than ~10 MB per 150 listings), but then it only works from its original folder
 with `thumbs/` beside it, opened directly in a browser rather than a preview
 pane.
 
-Features: client-side text search, a searched-city filter, price/title sorting,
-and a click-through detail view with the full description.
+Features: client-side text search, a searched-city filter, sorting by price,
+title, or year, and a click-through detail view with the full description.
+
+Year sorting reads the model year out of the title, since that's where vehicle
+sellers put it and no listing field carries it. The first `19xx`/`20xx` match
+bounded to 1900..next year wins, which keeps trim and spec numbers ("2500 lb
+winch", "3500 miles") from reading as years. Listings with no year sort to the
+bottom in *both* directions rather than clumping at one end, since "no year" is
+missing data, not an extreme value; ties fall back to original order.
 
 Hiding: each card has an `✕` in its corner (visible on hover). The tally line
 then offers "show N hidden" to review or un-hide. Hidden listings are remembered

@@ -3,8 +3,8 @@
 fb_marketplace_sweep.py
 ------------------------
 Personal-use, low-frequency Facebook Marketplace tooling. Sweeps saved-city
-searches into CSV + SQLite, optionally enriches listings from their detail
-pages, and downloads thumbnails locally so they survive URL expiry.
+searches into CSV + SQLite, optionally retrieves each listing's description
+from its detail page, and downloads thumbnails locally so they survive URL expiry.
 
 Extraction strategy (most durable first):
   1. Structured JSON: Facebook ships the data it renders from — GraphQL XHR
@@ -34,7 +34,7 @@ import time
 import webbrowser
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, unquote
 
 from playwright.sync_api import sync_playwright
 
@@ -60,7 +60,8 @@ FIELDS = ["item_id", "title", "price", "url", "image", "listing_location", "mile
           "description", "source_section", "matches_query", "location_searched",
           "query", "scraped_at", "raw_text"]
 
-# Randomized seconds to wait between detail-page hits during enrichment. This
+# Randomized seconds to wait between detail-page hits while retrieving
+# descriptions. This
 # is the one knob that trades runtime against how machine-like the traffic
 # looks to Facebook. Tuned so the totals land on ~7s and ~9s per listing once
 # the fixed page cost below is added.
@@ -69,7 +70,7 @@ DEFAULT_PACE = "fast"
 
 # Minutes of description retrieval to allow before stopping to ask. 0 or None
 # never asks, which is the default: the estimate is printed either way.
-DEFAULT_ENRICH_BUDGET_MIN = 0
+DEFAULT_DESCRIPTIONS_BUDGET_MIN = 0
 
 # Fixed per-listing costs on top of the pause, from measured runs: ~3.5s to
 # load a detail page and read its payload, plus ~1.5s to fetch and store the
@@ -337,6 +338,65 @@ def extract_json_listings(bodies, out):
                     stack.extend(o)
 
 
+# Segments that appear right after /marketplace/ but name a feature rather than
+# a place, so pasting one of those URLs is a mistake worth catching early.
+NOT_A_PLACE = {"item", "you", "category", "categories", "notifications", "saved",
+               "selling", "buying", "inbox", "profile", "create", "learn-more",
+               "search", "marketplace", "groups"}
+
+
+def parse_location(text):
+    """Pull the location segment out of whatever the user pasted.
+
+    Facebook identifies a Marketplace city by the segment after /marketplace/ —
+    usually a name like `dallas`, sometimes a numeric id. We accept a full URL
+    from the address bar (the realistic case) or a bare segment, and reject the
+    feature URLs people grab by accident."""
+    text = (text or "").strip()
+    if not text:
+        return None, "Paste a Marketplace link, or type the city's slug."
+    if "/" in text or "http" in text.lower():
+        m = SEG_RE.search(text) or re.search(r"/marketplace/([^/?#]+)", text, re.I)
+        if not m:
+            return None, ("That link has no /marketplace/<city> in it. Open "
+                          "Marketplace, switch to the city, and copy the URL.")
+        seg = m.group(1)
+    else:
+        seg = text
+    seg = unquote(seg).strip().strip("/").lower()
+    if not seg or not re.fullmatch(r"[a-z0-9._-]+", seg):
+        return None, f"'{seg}' doesn't look like a city slug."
+    if seg in NOT_A_PLACE:
+        return None, (f"'{seg}' is a Facebook page, not a city. Switch "
+                      "Marketplace to the city first, then copy the URL.")
+    return seg, None
+
+
+def add_location(label, text):
+    """Append a city to locations.json. Returns (locations, error)."""
+    label = (label or "").strip()
+    seg, err = parse_location(text)
+    if err:
+        return None, err
+    locs = json.loads(LOC_CACHE.read_text(encoding="utf-8")) if LOC_CACHE.exists() else {}
+    label = label or (seg.replace("-", " ").title() if not seg.isdigit() else f"loc-{seg}")
+    if label in locs:
+        return None, f"You already have a city called '{label}'."
+    if seg in locs.values():
+        dup = next(k for k, v in locs.items() if v == seg)
+        return None, f"That's the same place as '{dup}'."
+    locs[label] = seg
+    LOC_CACHE.write_text(json.dumps(locs, indent=2), encoding="utf-8")
+    return locs, None
+
+
+def remove_location(label):
+    locs = json.loads(LOC_CACHE.read_text(encoding="utf-8")) if LOC_CACHE.exists() else {}
+    locs.pop(label, None)
+    LOC_CACHE.write_text(json.dumps(locs, indent=2), encoding="utf-8")
+    return locs
+
+
 # ---------- import pasted URLs ----------
 def import_urls(path):
     locs = {}
@@ -394,15 +454,65 @@ def read_radius_km(page):
 EXPECTED_RADIUS_KM = 805
 
 
-def describe_radius(km):
+def describe_radius(km, note=True):
     if not km:
         return ""
     miles = round(km / 1.609)
-    note = ""
-    if km < EXPECTED_RADIUS_KM:
-        note = ("  <- smaller than the ~500 mi the city spacing assumes; "
-                "coverage will have gaps (see --set-radius)")
-    return f"~{miles} mi ({km} km){note}"
+    warn = ""
+    if note and km < EXPECTED_RADIUS_KM:
+        warn = ("  <- smaller than the ~500 mi the city spacing assumes; "
+                "coverage will have gaps")
+    return f"~{miles} mi ({km} km){warn}"
+
+
+def preflight_pause(page, url, skip=False):
+    """Hand the browser to the user before the sweep starts, and report the
+    radius while they're looking at it.
+
+    The radius is an account-level setting with a 250-mile default, and a run
+    started on that default silently searches a quarter of the area the city
+    spacing assumes — the listings it misses never show up as an error. Since
+    the login step already requires a human at the keyboard, this is the one
+    moment where showing them the number costs nothing.
+
+    Returns the radius in km as of the moment they continued, or None."""
+    goto_with_retry(page, url)
+    human_pause(3.0, 5.0)
+    km = read_radius_km(page)
+    if skip:
+        print(f"  search radius: {describe_radius(km) or 'unknown'}")
+        return km
+
+    print("\n" + "=" * 66)
+    print("The browser is ready. Before the sweep starts, in that window:")
+    print("\n  1. Close any Facebook popups (notifications, cookie banners).")
+    if km and km < EXPECTED_RADIUS_KM:
+        print(f"  2. Change the search radius. It's set to "
+              f"{describe_radius(km, note=False)},")
+        print("     but this needs 500 miles to cover the country. Open the")
+        print("     location control in the left sidebar to change it.")
+    elif km:
+        print(f"  2. Check the search radius. It reads "
+              f"{describe_radius(km, note=False)},")
+        print("     which is what you want.")
+    else:
+        print("  2. Check the search radius in the left sidebar. It should be")
+        print("     500 miles, not the 250 Facebook starts you on.")
+    print("     The radius is an account setting, so you only set it once.")
+    print("\n  3. Come back here and press Enter.")
+    print("=" * 66)
+    try:
+        input("\nPress Enter to start the sweep (Ctrl-C to quit)... ")
+    except EOFError:
+        print("(no terminal to wait on — starting)")
+        return km
+    except KeyboardInterrupt:
+        raise SystemExit("\nStopped before the sweep started. Nothing was saved.")
+
+    after = read_radius_km(page)
+    if after and after != km:
+        print(f"Radius is now {describe_radius(after, note=False)}.")
+    return after or km
 
 
 def query_tokens(query):
@@ -454,7 +564,7 @@ def price_number(price):
 
 def relevance(r, tokens, numbers):
     """Ranks how likely a listing is the thing you actually searched for, so
-    enrichment spends its time at the top of the list."""
+    description retrieval spends its time at the top of the list."""
     title = (r.get("title") or "").lower()
     score = 0
     for n in numbers:
@@ -500,7 +610,7 @@ def collect_city(page, max_scrolls, is_keeper=None, patience=4,
 
     The keeper test is the important one. Facebook's related-inventory tail is
     effectively bottomless on a broad query, so "no new cards" almost never
-    fires and depth just buys junk we pay to enrich. `is_keeper` receives a
+    fires and depth just buys junk we pay to fetch. `is_keeper` receives a
     card's on-screen text and should answer generously: a card whose text has
     not rendered yet counts as a keeper so missing data can never cut a scroll
     short.
@@ -720,9 +830,9 @@ def make_run_dir(query, base=None):
 
 def run(query, scrolls, exact, out_csv=None, only=None, keep_all=False,
         debug_dump=False, match=None, limit=None, thumbs_dir="thumbs",
-        do_enrich=True, do_thumbs=True, do_gallery=True, pace=DEFAULT_PACE,
-        exclude=(), min_price=None, max_price=None, enrich_budget=DEFAULT_ENRICH_BUDGET_MIN,
-        assume_yes=False, only_labels=None, open_gallery=True):
+        do_descriptions=True, do_thumbs=True, do_gallery=True, pace=DEFAULT_PACE,
+        exclude=(), min_price=None, max_price=None, descriptions_budget=DEFAULT_DESCRIPTIONS_BUDGET_MIN,
+        assume_yes=False, only_labels=None, open_gallery=True, no_pause=False):
     """One pass over everything: sweep every saved city, visit each kept
     listing's detail page at most once for its description and full-size photo,
     save that photo locally while its URL is still fresh, then build the
@@ -756,11 +866,11 @@ def run(query, scrolls, exact, out_csv=None, only=None, keep_all=False,
     debug_root = (run_dir / "debug") if run_dir else DEBUG_DIR
     if debug_dump:
         debug_root.mkdir(parents=True, exist_ok=True)
-    stages = ["sweep"] + (["enrich"] if do_enrich else []) \
+    stages = ["sweep"] + (["retrieve descriptions"] if do_descriptions else []) \
         + (["thumbnails"] if do_thumbs else []) + (["gallery"] if do_gallery else [])
     print(f"Plan: {' -> '.join(stages)} for {len(locs)} "
           f"location{'s' if len(locs) != 1 else ''}, query '{query}'"
-          + (f", '{pace}' enrich pacing." if do_enrich else "."))
+          + (f", '{pace}' description pacing." if do_descriptions else "."))
     if run_dir:
         print(f"Output folder: {run_dir}")
     if exclude:
@@ -788,6 +898,10 @@ def run(query, scrolls, exact, out_csv=None, only=None, keep_all=False,
 
         page.on("response", on_response)
         ensure_logged_in(page)
+        first_seg = next(iter(locs.values()))
+        radius_km = preflight_pause(
+            page, build_search_url(first_seg, query, exact, min_price, max_price),
+            skip=no_pause)
         for label, seg in locs.items():
             url = build_search_url(seg, query, exact, min_price, max_price)
             print(f"\n[{label}] {url}")
@@ -882,8 +996,8 @@ def run(query, scrolls, exact, out_csv=None, only=None, keep_all=False,
         if not thumbs_path.is_absolute():
             thumbs_path = out_path.resolve().parent / thumbs_path
 
-        enriched, interrupted = 0, False
-        if do_enrich and rows:
+        described, interrupted = 0, False
+        if do_descriptions and rows:
             targets = [r for r in rows
                        if not match or match.lower() in (r.get("title", "").lower())]
             # Best matches first, so a capped or interrupted run still spends
@@ -891,7 +1005,7 @@ def run(query, scrolls, exact, out_csv=None, only=None, keep_all=False,
             targets.sort(key=lambda r: (-r["_score"], r.get("title", "")))
             if limit:
                 targets = targets[:limit]
-            targets = confirm_enrich_size(targets, pace, enrich_budget,
+            targets = confirm_description_count(targets, pace, descriptions_budget,
                                           assume_yes, do_thumbs)
             if targets:
                 # Commit per listing: this stage runs for as long as an hour and
@@ -900,10 +1014,10 @@ def run(query, scrolls, exact, out_csv=None, only=None, keep_all=False,
                 def save_row(r):
                     upsert(con, r)
                     con.commit()
-                finished = enrich_rows(ctx, page, targets,
+                finished = retrieve_descriptions(ctx, page, targets,
                                        thumbs_path if do_thumbs else None,
                                        debug_dump, pace, on_row=save_row)
-                enriched = sum(1 for r in targets if r.get("description"))
+                described = sum(1 for r in targets if r.get("description"))
                 # An interrupt means stop working, not throw away the run: skip
                 # the remaining downloads and go straight to the CSV + gallery.
                 interrupted = not finished
@@ -957,8 +1071,8 @@ def run(query, scrolls, exact, out_csv=None, only=None, keep_all=False,
             "dropped": dropped_total,
             "drop_reasons": drop_reasons,
             "duplicates_collapsed": dup_collapsed,
-            "descriptions_captured": enriched,
-            "interrupted_during_enrich": interrupted,
+            "descriptions_captured": described,
+            "interrupted_during_descriptions": interrupted,
             "images_local": sum(1 for r in rows
                                 if (r.get("image") or "").startswith(f"{thumbs_path.name}/")),
             "files": {"csv": out_path.name, "gallery": gallery,
@@ -978,37 +1092,38 @@ def run(query, scrolls, exact, out_csv=None, only=None, keep_all=False,
             print(f"  couldn't open a browser ({e}); open the file yourself.")
 
 
-# ---------- enrich (detail pages) ----------
-def enrich_seconds_each(pace, with_thumbs=True):
+# ---------- description retrieval (detail pages) ----------
+def description_seconds_each(pace, with_thumbs=True):
     lo, hi = PACES[pace]
     return (PAGE_WORK_SECONDS + (PHOTO_SAVE_SECONDS if with_thumbs else 0)
             + (lo + hi) / 2)
 
 
-def confirm_enrich_size(targets, pace, budget_minutes, assume_yes=False,
+def confirm_description_count(targets, pace, budget_minutes, assume_yes=False,
                         with_thumbs=True):
-    """Enrichment is the expensive stage — a few thousand listings is hours of
-    detail-page visits. Anything over the budget asks first instead of silently
-    committing the evening to it."""
-    per = enrich_seconds_each(pace, with_thumbs)
+    """Retrieving descriptions is the expensive stage — a few thousand listings
+    is hours of detail-page visits. Anything over the budget asks first instead
+    of silently committing the evening to it."""
+    per = description_seconds_each(pace, with_thumbs)
     est = len(targets) * per / 60
     if assume_yes or not budget_minutes or est <= budget_minutes:
         return targets
     fits = max(1, int(budget_minutes * 60 / per))
-    print(f"\n!! Enriching all {len(targets)} listings would take about "
-          f"{fmt_dur(est * 60)} at '{pace}' pacing.")
+    print(f"\n!! Retrieving descriptions for all {len(targets)} listings would "
+          f"take about {fmt_dur(est * 60)} at '{pace}' pacing.")
     print(f"   The top {fits} by relevance fit inside your "
           f"{budget_minutes}-minute budget.")
     try:
-        ans = input(f"   [Enter] top {fits}  /  (a)ll  /  (s)kip enrichment: ").strip().lower()
+        ans = input(f"   [Enter] top {fits}  /  (a)ll  /  (s)kip descriptions: ").strip().lower()
     except EOFError:
         ans = ""
     if ans.startswith("a"):
         return targets
     if ans.startswith("s"):
-        print("   Skipping enrichment. Descriptions and local photos will be missing.")
+        print("   Skipping this stage. Descriptions and local photos will be "
+              "missing.")
         return []
-    print(f"   Enriching the top {fits}.")
+    print(f"   Retrieving descriptions for the top {fits}.")
     return targets[:fits]
 
 
@@ -1057,7 +1172,7 @@ def wait_for_detail(page, timeout_s=8.0):
     return desc, img
 
 
-def enrich_rows(ctx, page, targets, thumbs_path=None, debug_dump=False,
+def retrieve_descriptions(ctx, page, targets, thumbs_path=None, debug_dump=False,
                 pace=DEFAULT_PACE, on_row=None):
     """Visit each target's detail page once: description, full-size photo, and
     (when thumbs_path is given) the photo saved to disk immediately, while its
@@ -1069,9 +1184,9 @@ def enrich_rows(ctx, page, targets, thumbs_path=None, debug_dump=False,
 
     Returns False if Ctrl-C ended it early, True otherwise."""
     lo, hi = PACES[pace]
-    per = enrich_seconds_each(pace, thumbs_path is not None)
-    print(f"\nEnriching {len(targets)} listings — one detail page each at "
-          f"'{pace}' pacing ({lo:g}-{hi:g}s between hits), roughly "
+    per = description_seconds_each(pace, thumbs_path is not None)
+    print(f"\nRetrieving descriptions for {len(targets)} listings — one detail "
+          f"page each at '{pace}' pacing ({lo:g}-{hi:g}s between hits), roughly "
           f"{max(1, round(len(targets) * per / 60))} min. "
           "(--limit / --match narrow it; --pace changes the throttle.)")
     if debug_dump:
@@ -1176,8 +1291,8 @@ def fetch_thumbs(ctx, rows, outdir):
             reused += 1
         elif img.startswith("http"):
             todo.append(r)
-    print(f"\nThumbnails: {local} saved during enrichment, {reused} already on "
-          f"disk, {len(todo)} to fetch.")
+    print(f"\nThumbnails: {local} saved while retrieving descriptions, "
+          f"{reused} already on disk, {len(todo)} to fetch.")
     ok = 0
     for i, r in enumerate(todo, 1):
         rel = save_image(ctx, r["image"], r["item_id"], outdir)
@@ -1205,7 +1320,7 @@ def read_unique(src):
     return rows, uniq
 
 
-def enrich(csv_in, match, limit=None, debug_dump=False, thumbs_dir=None,
+def descriptions_from_csv(csv_in, match, limit=None, debug_dump=False, thumbs_dir=None,
            pace=DEFAULT_PACE):
     started = time.time()
     src = Path(csv_in)
@@ -1226,9 +1341,9 @@ def enrich(csv_in, match, limit=None, debug_dump=False, thumbs_dir=None,
         ctx = launch_context(p)
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
         ensure_logged_in(page)
-        enrich_rows(ctx, page, targets, thumbs_path, debug_dump, pace)
+        retrieve_descriptions(ctx, page, targets, thumbs_path, debug_dump, pace)
         ctx.close()
-    out = src.with_name(src.stem + "_enriched.csv")
+    out = src.with_name(src.stem + "_with_descriptions.csv")
     write_csv(uniq, out, out_fields)
     print(f"Wrote {out}. Finished in {fmt_dur(time.time() - started)}.")
 
@@ -1292,11 +1407,18 @@ def run_from_ui(a):
         print("No locations.json. Run --import-urls first.")
         return
     locs = json.loads(LOC_CACHE.read_text(encoding="utf-8"))
+
+    def ui_add_city(label, text):
+        updated, err = add_location(label, text)
+        return (list(updated.keys()) if updated else []), err
+
     cfg = settings_ui.collect_settings(
         list(locs.keys()), PACES,
         {"query": a.query or "", "exclude": a.exclude or "", "pace": a.pace,
          "page_work": PAGE_WORK_SECONDS, "photo_save": PHOTO_SAVE_SECONDS,
-         "enrich_budget": a.enrich_budget})
+         "descriptions_budget": a.descriptions_budget},
+        on_add=ui_add_city,
+        on_remove=lambda label: list(remove_location(label).keys()))
     if not cfg:
         print("Cancelled — nothing was run.")
         return
@@ -1304,18 +1426,19 @@ def run_from_ui(a):
           f"cit{'y' if len(cfg['cities']) == 1 else 'ies'}.")
     run(cfg["query"], DEFAULT_SCROLLS, cfg["exact"], a.out, None, a.keep_all,
         cfg["debug_dump"], a.match, cfg["limit"], a.thumbs_dir,
-        do_enrich=cfg["do_enrich"], do_thumbs=cfg["do_thumbs"],
+        do_descriptions=cfg["do_descriptions"], do_thumbs=cfg["do_thumbs"],
         do_gallery=cfg["do_gallery"], pace=cfg["pace"],
         exclude=[t.strip() for t in cfg["exclude"].split(",") if t.strip()],
         min_price=cfg["min_price"], max_price=cfg["max_price"],
-        enrich_budget=cfg["enrich_budget"], assume_yes=a.yes,
-        only_labels=cfg["cities"], open_gallery=not a.no_open)
+        descriptions_budget=cfg["descriptions_budget"], assume_yes=a.yes,
+        only_labels=cfg["cities"], open_gallery=not a.no_open,
+        no_pause=a.no_pause)
 
 
 def main():
     ap = argparse.ArgumentParser(
         description="Personal-use FB Marketplace sweep. A plain --query run does "
-                    "everything: sweep, enrich, thumbnails, gallery.")
+                    "everything: sweep, descriptions, thumbnails, gallery.")
     ap.add_argument("--query", help="search query (required for a run)")
     ap.add_argument("--import-urls", metavar="FILE")
     ap.add_argument("--out", metavar="CSV",
@@ -1327,12 +1450,17 @@ def main():
                     help="drop listings under N dollars (also sent to Facebook)")
     ap.add_argument("--max-price", type=int, metavar="N",
                     help="drop listings over N dollars (also sent to Facebook)")
-    ap.add_argument("--enrich-budget", type=int, metavar="MIN",
-                    default=DEFAULT_ENRICH_BUDGET_MIN,
-                    help="ask before enriching longer than MIN minutes "
-                         "(default 0, which never asks)")
+    # The old --enrich* spellings stay on as hidden aliases so existing notes
+    # and scripts keep working.
+    ap.add_argument("--descriptions-budget", "--enrich-budget", type=int,
+                    metavar="MIN", dest="descriptions_budget",
+                    default=DEFAULT_DESCRIPTIONS_BUDGET_MIN,
+                    help="ask before retrieving descriptions would take longer "
+                         "than MIN minutes (default 0, which never asks)")
     ap.add_argument("--yes", action="store_true",
-                    help="don't ask about long enrichment jobs, just run them")
+                    help="don't ask about long description jobs, just run them")
+    ap.add_argument("--no-pause", action="store_true",
+                    help="skip the pause after login for popups and the radius")
     ap.add_argument("--no-open", action="store_true",
                     help="don't open the finished gallery in a browser")
     ap.add_argument("--set-radius", action="store_true",
@@ -1342,11 +1470,13 @@ def main():
     ap.add_argument("--no-ui", action="store_true",
                     help="never open the settings window, even with no arguments")
     ap.add_argument("--only", metavar="LABEL", help="run only locations whose label contains LABEL")
-    ap.add_argument("--match", metavar="TERM", help="only enrich listings whose title contains TERM")
-    ap.add_argument("--limit", type=int, metavar="N", help="only enrich the first N listings")
+    ap.add_argument("--match", metavar="TERM", help="only describe listings whose title contains TERM")
+    ap.add_argument("--limit", type=int, metavar="N",
+                    help="only retrieve descriptions for the first N listings")
     ap.add_argument("--thumbs-dir", default="thumbs", help="thumbnail folder (default: thumbs)")
     ap.add_argument("--pace", choices=list(PACES), default=DEFAULT_PACE,
-                    help="pause between detail-page hits while enriching: "
+                    help="pause between detail-page hits while retrieving "
+                         "descriptions: "
                          f"fast (1-2.5s, ~7s per listing, default), "
                          f"slow (3-5s, ~9s per listing)")
     ap.add_argument("--scrolls", type=int, default=DEFAULT_SCROLLS,
@@ -1356,13 +1486,16 @@ def main():
     ap.add_argument("--exact", action="store_true", help="tight matching (default loose)")
     ap.add_argument("--keep-all", action="store_true",
                     help="keep outside-search and non-matching listings instead of dropping them")
-    ap.add_argument("--no-enrich", action="store_true", help="skip the detail-page stage")
+    ap.add_argument("--no-descriptions", "--no-enrich", action="store_true",
+                    dest="no_descriptions", help="skip the detail-page stage")
     ap.add_argument("--no-thumbs", action="store_true", help="skip downloading images")
     ap.add_argument("--no-gallery", action="store_true", help="skip building gallery.html")
     ap.add_argument("--debug-dump", action="store_true",
                     help="save raw Facebook JSON payloads to debug/ for troubleshooting")
-    ap.add_argument("--enrich", metavar="CSV",
-                    help="one-off: enrich an existing CSV instead of running a sweep")
+    ap.add_argument("--descriptions", "--enrich", metavar="CSV",
+                    dest="descriptions",
+                    help="one-off: retrieve descriptions for an existing CSV "
+                         "instead of running a sweep")
     ap.add_argument("--download-thumbs", metavar="CSV",
                     help="one-off: download the image URLs in an existing CSV")
     a = ap.parse_args()
@@ -1371,9 +1504,9 @@ def main():
         import_urls(a.import_urls)
     elif a.set_radius:
         set_radius()
-    elif a.enrich:
-        enrich(a.enrich, a.match, a.limit, a.debug_dump,
-               None if a.no_thumbs else a.thumbs_dir, a.pace)
+    elif a.descriptions:
+        descriptions_from_csv(a.descriptions, a.match, a.limit, a.debug_dump,
+                              None if a.no_thumbs else a.thumbs_dir, a.pace)
     elif a.download_thumbs:
         download_thumbs(a.download_thumbs, a.thumbs_dir)
     elif a.ui or (not a.query and not a.no_ui):
@@ -1383,11 +1516,11 @@ def main():
             ap.error("--query is required (no silent default)")
         run(a.query, a.scrolls, a.exact, a.out, a.only, a.keep_all, a.debug_dump,
             a.match, a.limit, a.thumbs_dir,
-            do_enrich=not a.no_enrich, do_thumbs=not a.no_thumbs,
+            do_descriptions=not a.no_descriptions, do_thumbs=not a.no_thumbs,
             do_gallery=not a.no_gallery, pace=a.pace, exclude=exclude,
             min_price=a.min_price, max_price=a.max_price,
-            enrich_budget=a.enrich_budget, assume_yes=a.yes,
-            open_gallery=not a.no_open)
+            descriptions_budget=a.descriptions_budget, assume_yes=a.yes,
+            open_gallery=not a.no_open, no_pause=a.no_pause)
 
 
 if __name__ == "__main__":

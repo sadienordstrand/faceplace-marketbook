@@ -294,12 +294,32 @@ HTML = """<!doctype html>
 <script id="data" type="application/json">__DATA__</script>
 <script>
   const rows = JSON.parse(document.getElementById('data').textContent);
+  // Vehicle sellers almost always lead with the model year, so the first
+  // plausible 4-digit year in the title is the listing's year. Bounded to
+  // 1900..next year so trim numbers and part numbers can't masquerade as one,
+  // and left null when there's nothing to find, which sorts to the bottom.
+  const NEXT_YEAR = new Date().getFullYear() + 1;
+  const yearOf = title => {
+    for (const m of String(title || '').matchAll(/\\b(1[89]\\d{2}|20\\d{2})\\b/g)) {
+      const y = +m[1];
+      if (y >= 1900 && y <= NEXT_YEAR) return y;
+    }
+    return null;
+  };
   rows.forEach((r, i) => {
     r._i = i;
     r._price = parseFloat((r.price || '').replace(/[^0-9.]/g, '')) || 0;
+    r._year = yearOf(r.title);
     r._hay = ((r.title || '') + ' ' + (r.description || '') + ' ' +
               (r.listing_location || '')).toLowerCase();
   });
+  // Undated listings always sit at the bottom, whichever direction we sort.
+  const byYear = dir => (a, b) => {
+    if (a._year === null || b._year === null) {
+      return (a._year === null) - (b._year === null) || a._i - b._i;
+    }
+    return dir * (b._year - a._year) || a._i - b._i;
+  };
   const esc = s => (s || '').replace(/[&<>"]/g,
     m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
 
@@ -366,6 +386,8 @@ HTML = """<!doctype html>
     { value: 'default', label: 'Original order' },
     { value: 'price-asc', label: 'Price: low → high' },
     { value: 'price-desc', label: 'Price: high → low' },
+    { value: 'year-desc', label: 'Year: newest first' },
+    { value: 'year-asc', label: 'Year: oldest first' },
     { value: 'title', label: 'Title A→Z' },
   ], () => render());
 
@@ -490,6 +512,8 @@ HTML = """<!doctype html>
     if (!showHidden) out = out.filter(r => !hidden.has(r.item_id));
     if (sort === 'price-asc') out.sort((a, b) => a._price - b._price);
     else if (sort === 'price-desc') out.sort((a, b) => b._price - a._price);
+    else if (sort === 'year-desc') out.sort(byYear(1));
+    else if (sort === 'year-asc') out.sort(byYear(-1));
     else if (sort === 'title') out.sort((a, b) => (a.title || '').localeCompare(b.title || ''));
     else out.sort((a, b) => a._i - b._i);
     const shown = showHidden ? out.length - hiddenHere : out.length;

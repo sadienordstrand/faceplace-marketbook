@@ -101,14 +101,14 @@ isn't.
 **Windows** shows a blue "Windows protected your PC" box. Click **More info**,
 then **Run anyway**.
 
-**Mac** shows *"Apple could not verify ... is free of malware"*. 
+**Mac** shows *"Apple could not verify ... is free of malware"*.
 The button you need is in Settings:
 
-2. Open **System Settings** → **Privacy & Security**.
-3. Scroll down to the **Security** section. You'll see a line saying
+1. Open **System Settings** → **Privacy & Security**.
+2. Scroll down to the **Security** section. You'll see a line saying
    `"Start Faceplace (Mac).command" was blocked to protect your Mac`, with an
    **Open Anyway** button next to it. Click it.
-4. Confirm with your password or Touch ID, and click **Open Anyway** again if
+3. Confirm with your password or Touch ID, and click **Open Anyway** again if
    asked.
 
 **Mac, alternative that always works:** you can run it from Terminal instead and
@@ -134,6 +134,26 @@ and carries on by itself.
 It remembers the session, so you shouldn't have to do this again for a long
 while. If it ever asks again, just log in again.
 
+### Step 4 — Set your search radius
+
+Once you're logged in, the app loads Marketplace and then **stops and waits for
+you** before searching anything. The terminal tells you what to do; the reason
+it waits is this:
+
+**Facebook gives every account a 250-mile search radius by default, and this
+needs 500.** The radius belongs to your Facebook account, not to this app, so
+it's not something the app can set for you. At 250 miles the twelve cities
+cover about a quarter of the country, and you'd never know — you'd just get
+fewer results and no error.
+
+So in the browser window, click the location control in the left sidebar and
+set the distance to **500 miles**. While you're in there, dismiss any Facebook
+notification popups. Then come back to the terminal and press **Enter**.
+
+The terminal prints the radius it can see, so you don't have to guess whether
+you got it right. It's an account setting and it sticks, so once you've done
+this you can press Enter straight past it on future runs.
+
 ---
 
 ## Running a search
@@ -145,7 +165,8 @@ itself, so this is only the shape of it:
 - **Query** — what you're looking for, e.g. `land rover defender 110`. More
   words narrows the results.
 - **Cities** — each selected city searches a 500-mile radius around itself.
-  Select all of them to cover the continental US.
+  Select all of them to cover the continental US. You can add your own cities
+  too; see below.
 - **Price range** and **Exclude terms** — the two most effective ways to cut
   junk. See below.
 - **Stages** — whether to collect descriptions, download photos, and build the
@@ -174,6 +195,28 @@ either way.
 
 **Leave "Exact matching" off.** When testing with and without "Exact matching" on the same city, 
 turning it on found nothing the normal search missed, and it threw away 34 genuine matches.
+
+### Adding your own cities
+
+The twelve cities that come with it are spaced so their 500-mile circles cover
+the continental US, so for a nationwide search you don't need to add anything.
+Adding cities is for when you want somewhere covered more densely, or you're
+searching outside the US.
+
+Facebook identifies a Marketplace city by a short name buried in its web
+address. To get it:
+
+1. Open **facebook.com/marketplace** in your ordinary browser.
+2. Click the location button near the top left — it shows whichever city you're
+   currently browsing.
+3. Type the city you want, pick it from the list, and click Apply.
+4. Copy the whole web address from the address bar.
+
+Paste that into the box at the bottom of the **Cities** section, give it a name,
+and click **Add city**. The app pulls out the part it needs and tells you if the
+link isn't one it can use. Cities you add are saved and will be there next time.
+To get rid of one, hover over it and click the **✕**, then click again to
+confirm.
 
 ---
 
@@ -222,10 +265,15 @@ each folder:
 - **`run.json`** — a record of what was searched and what came back.
 - **`thumbs/`** — the photos as individual files.
 
-In the gallery you can search the text, filter by which city found it, sort by
-price, and click any card for the full description. The **✕** in a card's corner
-hides listings you're not interested in; the app remembers what you've hidden
-even after you close and reopen the page.
+In the gallery you can search the text, filter by which city found it, and click
+any card for the full description. The **✕** in a card's corner hides listings
+you're not interested in; the app remembers what you've hidden even after you
+close and reopen the page.
+
+The sort menu offers price, title, and **year**. Year is read out of the
+listing's title, which is where vehicle sellers put it — "1995 Land Rover
+Defender 110" sorts as 1995. Anything without a year in its title, like a parts
+listing, collects at the bottom whichever direction you sort.
 
 ---
 
@@ -239,10 +287,10 @@ window and start again.
 Facebook wants to re-check. Just log in again.
 
 **Hardly any results, or none.** Usually the search term is too specific, or the
-excluded terms are too broad. Try fewer words. It's also worth checking the line
-the app prints about search radius — if it reports less than 500 miles, your
-Facebook account's Marketplace radius got changed, and the cities no longer
-cover the country. It will tell you how to put it back.
+excluded terms are too broad. Try fewer words. The other likely cause is the
+search radius: if the app reported less than 500 miles at the pause before the
+sweep, the cities no longer cover the country. Run it again and fix the radius
+at that pause (Step 4 above).
 
 **Some pictures say "image expired".** Facebook's photo links go stale within
 hours. The app saves photos as it goes to avoid this, but a few can slip through
