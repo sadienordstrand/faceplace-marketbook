@@ -15,7 +15,8 @@ import argparse
 import sqlite3
 from pathlib import Path
 
-from fb_marketplace_sweep import (DB_PATH, FIELDS, write_csv, make_run_dir,
+from fb_marketplace_sweep import (DB_PATH, FIELDS, LEGACY_THUMBS_DIRNAMES,
+                                  THUMBS_DIRNAME, write_csv, make_run_dir,
                                   relevance, query_tokens, query_numbers)
 
 
@@ -83,7 +84,8 @@ def main():
     # in, so a rebuild that lands somewhere else can't resolve them. The gallery
     # falls back to the remote URL, which may have expired — say so rather than
     # let it look like a bug.
-    local_imgs = sum(1 for r in rows if (r.get("image") or "").startswith("thumbs/"))
+    local_imgs = sum(1 for r in rows
+                     if (r.get("image") or "").startswith(LEGACY_THUMBS_DIRNAMES))
 
     out = Path(a.out) if a.out else make_run_dir(f"{a.query} rebuilt") / "results.csv"
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -99,8 +101,8 @@ def main():
         print(f"Wrote {path}")
         if local_imgs:
             print(f"\n{local_imgs} listings point at photos saved in their original\n"
-                  f"run folder. To see them, copy that folder's thumbs/ next to\n"
-                  f"the file above.")
+                  f"run folder. To see them, copy that folder's {THUMBS_DIRNAME}/ next\n"
+                  f"to the file above.")
 
 
 if __name__ == "__main__":

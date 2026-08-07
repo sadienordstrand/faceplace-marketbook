@@ -3,6 +3,16 @@
 runs/
 debug/
 
+# Scheduled searches. email_config.json holds a Gmail app password, which grants
+# full access to that mailbox — it must never be committed.
+email_config.json
+saved_searches.json
+.schedule/
+
+# Cities you added yourself. locations.json holds the ones the app ships with and
+# stays tracked; personal ones live here so adding one isn't a repo change.
+my_locations.json
+
 # Python
 __pycache__/
 *.py[cod]

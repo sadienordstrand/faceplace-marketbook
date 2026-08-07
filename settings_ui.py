@@ -26,6 +26,9 @@ CSS = """
     --type: "Courier Prime", "American Typewriter", "Courier New", monospace;
   }
   * { box-sizing: border-box; }
+  /* Several rules below set display on things the page also hides, and a class
+     rule beats the browser's own [hidden] rule, so make hiding win outright. */
+  [hidden] { display: none !important; }
   body {
     margin: 0; background: var(--bg); color: var(--ink);
     font-family: var(--body); -webkit-font-smoothing: antialiased;
@@ -165,6 +168,89 @@ CSS = """
   .cancel { background: none; color: var(--ink-soft); border: 1px solid var(--rule); }
   .cancel:hover { color: var(--ink); border-color: var(--ink-soft); }
   .warn { color: var(--accent); font-family: var(--type); font-size: 10pt; }
+  .blocked {
+    border-left: 3px solid var(--accent); background: rgba(237,146,107,.09);
+    padding: 12px 15px; margin: 0 0 14px; font-size: 11.5pt; line-height: 1.55;
+  }
+  .blocked p { margin: 0 0 9px; }
+  .blocked p:last-child { margin: 0; }
+  .blocked code { word-break: break-all; }
+
+  /* Tabs */
+  .tabs { display: flex; gap: 0; margin-top: 14px; }
+  .tabs button {
+    background: none; border: 0; border-bottom: 3px solid transparent;
+    color: var(--ink-soft); cursor: pointer; padding: 9px 0; margin-right: 26px;
+    font-family: var(--type); font-size: 10pt; letter-spacing: .18em;
+    text-transform: uppercase;
+  }
+  .tabs button:hover { color: var(--ink); }
+  .tabs button[aria-selected="true"] {
+    color: var(--accent); border-bottom-color: var(--accent); font-weight: 700;
+  }
+  .pane[hidden] { display: none; }
+
+  /* Dropdowns. appearance:none is what lets the OS widget match the palette. */
+  select {
+    width: 100%; padding: 10px 34px 10px 12px; color: var(--ink);
+    background: var(--olive-dk); border: 1px solid var(--rule);
+    border-radius: 2px; font-family: var(--type); font-size: 11pt;
+    appearance: none; cursor: pointer;
+    background-image: linear-gradient(45deg, transparent 50%, var(--accent) 50%),
+                      linear-gradient(135deg, var(--accent) 50%, transparent 50%);
+    background-position: calc(100% - 18px) 55%, calc(100% - 13px) 55%;
+    background-size: 5px 5px, 5px 5px; background-repeat: no-repeat;
+  }
+  select:focus { outline: none; border-color: var(--accent); }
+  .every { display: flex; gap: 12px; align-items: flex-start; }
+  .every .num { flex: 0 0 110px; }
+  .every .unit { flex: 0 0 190px; }
+
+  /* Saved search cards */
+  .saved { display: flex; flex-direction: column; gap: 12px; }
+  .card {
+    background: var(--olive-dk); border: 1px solid var(--rule);
+    border-radius: 3px; padding: 14px 16px;
+  }
+  .card.off { opacity: .6; }
+  .card .top {
+    display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
+  }
+  .card .nm {
+    font-family: var(--type); font-size: 11.5pt; font-weight: 700;
+    letter-spacing: .1em; text-transform: uppercase; color: var(--ink);
+  }
+  .card .pill {
+    font-family: var(--type); font-size: 9pt; letter-spacing: .14em;
+    text-transform: uppercase; color: var(--accent);
+    border: 1px solid rgba(237,146,107,.45); border-radius: 2px; padding: 2px 8px;
+  }
+  .card .pill.paused { color: var(--ink-soft); border-color: var(--rule); }
+  .card .det {
+    color: var(--ink-soft); font-size: 11pt; margin-top: 8px; line-height: 1.6;
+  }
+  .card .acts { display: flex; gap: 7px; margin-top: 13px; flex-wrap: wrap; }
+  .empty {
+    color: var(--ink-soft); font-style: italic; padding: 18px 0; font-size: 11.5pt;
+  }
+  .note {
+    border-left: 3px solid var(--accent); background: rgba(237,146,107,.08);
+    padding: 10px 14px; margin-top: 14px; font-size: 11pt; line-height: 1.6;
+    color: var(--ink); white-space: pre-line;
+  }
+  .note.ok { border-left-color: #8FA85C; background: rgba(143,168,92,.1); }
+  .note.bad { border-left-color: var(--accent); }
+  .note[hidden] { display: none; }
+  .schedstate {
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    margin-bottom: 4px;
+  }
+  .dot {
+    width: 9px; height: 9px; border-radius: 50%; background: var(--ink-soft);
+    flex: none;
+  }
+  .dot.on { background: #8FA85C; }
+  .dot.stuck { background: var(--accent); }
 """
 
 HTML = """<!doctype html>
@@ -177,8 +263,14 @@ HTML = """<!doctype html>
 <header>
   <div class="brand">Faceplace Marketbook</div>
   <div class="sub">Search setup</div>
+  <div class="tabs" role="tablist">
+    <button id="tabNew" role="tab" aria-selected="true">New search</button>
+    <button id="tabSaved" role="tab" aria-selected="false">Saved searches</button>
+    <button id="tabEmail" role="tab" aria-selected="false">Email &amp; schedule</button>
+  </div>
 </header>
 <main>
+<div class="pane" id="paneNew">
   <section>
     <h2>Search</h2>
     <label class="field">
@@ -231,15 +323,16 @@ HTML = """<!doctype html>
              placeholder="paste the Marketplace link for that city">
       <button class="mini" id="addCity">Add city</button>
     </div>
-    <div class="hint addcity-msg" id="addCityMsg">Cities you add are saved for
-      next time. Hover a city to remove it.</div>
+    <div class="hint addcity-msg" id="addCityMsg">Cities you add are saved in your
+      own file, and you can remove them again by hovering over them. The twelve
+      the app comes with are permanent — untick one to skip it for a run.</div>
 
     <details class="help">
       <summary>How to get a city's link</summary>
       <div class="hint">
         <ol>
           <li>Open <b>facebook.com/marketplace</b> in your browser.</li>
-          <li>Click the location button near the top left — it shows whatever
+          <li>Click the location on the left sidebar — it shows whatever
             city you're currently browsing.</li>
           <li>Type the city you want, pick it from the list, set the radius to
             <b>500 miles</b>, and click Apply.</li>
@@ -317,6 +410,122 @@ HTML = """<!doctype html>
       </label>
     </div>
   </section>
+
+  <section id="saveBlock">
+    <h2>Run this on a schedule</h2>
+    <div class="hint" style="margin: 0 0 16px">Save these settings under a name
+      and this search will run itself, then email you what it found. It only
+      fetches descriptions and photos for listings it hasn't seen before, so
+      later runs are much quicker than the first one.</div>
+    <label class="field"><span class="lab">Name this search</span>
+      <input type="text" id="save_name" placeholder="Defender 110">
+    </label>
+    <label class="field"><span class="lab">Email the report to</span>
+      <input type="text" id="save_email" placeholder="you@example.com">
+      <div class="hint">Leave blank to use the address on the
+        <b>Email &amp; schedule</b> tab.</div>
+    </label>
+    <div class="lab">How often</div>
+    <div class="every">
+      <div class="num"><input type="number" id="save_every" value="1" min="1"></div>
+      <div class="unit"><select id="save_unit"></select></div>
+    </div>
+    <div class="note" id="saveWarn" hidden></div>
+    <div class="note" id="saveMsg" hidden></div>
+    <div class="acts" style="display:flex; gap:9px; margin-top:16px">
+      <button class="mini" id="saveSearch">Save scheduled search</button>
+      <button class="mini" id="cancelEdit" hidden>Stop editing</button>
+    </div>
+  </section>
+</div>
+
+<div class="pane" id="paneSaved" hidden>
+  <section>
+    <div class="seclab"><h2>Saved searches</h2>
+      <div class="grp"><button class="mini" id="refreshSaved">Refresh</button></div>
+    </div>
+    <div class="hint" style="margin: 0 0 16px">These run on their own and email
+      you a report. Editing one loads it back into the <b>New search</b> tab.</div>
+    <div class="saved" id="savedList"></div>
+    <div class="note" id="savedMsg" hidden></div>
+  </section>
+</div>
+
+<div class="pane" id="paneEmail" hidden>
+  <section>
+    <h2>Automatic runs</h2>
+    <div class="schedstate">
+      <span class="dot" id="schedDot"></span>
+      <span class="lab" style="margin:0" id="schedState">Checking…</span>
+    </div>
+    <div class="hint" style="margin: 10px 0 14px" id="schedHint"></div>
+    <div class="blocked" id="schedProblem" hidden></div>
+    <div class="acts" style="display:flex; gap:9px">
+      <button class="mini" id="schedOn">Turn automatic runs on</button>
+      <button class="mini" id="schedOff">Turn them off</button>
+    </div>
+    <div class="note" id="schedMsg" hidden></div>
+  </section>
+
+  <section>
+    <h2>Email</h2>
+    <div class="hint" style="margin: 0 0 16px">Reports are sent from your own
+      email account. For Gmail you need an <b>app password</b>, not your normal
+      password — see the steps below. An app password gives this tool full access
+      to that mailbox, so it's stored in <code>email_config.json</code>, which is
+      kept out of version control.</div>
+    <label class="field"><span class="lab">Your email address</span>
+      <input type="text" id="mail_address" placeholder="you@gmail.com">
+    </label>
+    <label class="field"><span class="lab">App password</span>
+      <input type="text" id="mail_password" placeholder="sixteen letters from Google">
+    </label>
+    <div class="row">
+      <label class="field"><span class="lab">Provider</span>
+        <select id="mail_provider">
+          <option value="gmail">Gmail</option>
+          <option value="outlook">Outlook</option>
+          <option value="icloud">iCloud</option>
+          <option value="other">Other (set server below)</option>
+        </select>
+      </label>
+      <label class="field"><span class="lab">Send reports to</span>
+        <input type="text" id="mail_to" placeholder="same as your address">
+      </label>
+    </div>
+    <div class="row" id="mailHostRow" hidden>
+      <label class="field"><span class="lab">SMTP server</span>
+        <input type="text" id="mail_host" placeholder="mail.example.com"></label>
+      <label class="field"><span class="lab">Port</span>
+        <input type="number" id="mail_port" placeholder="587" min="1"></label>
+    </div>
+    <div class="acts" style="display:flex; gap:9px; margin-top:4px">
+      <button class="mini" id="saveMail">Save</button>
+      <button class="mini" id="testMail">Send a test email</button>
+    </div>
+    <div class="note" id="mailMsg" hidden></div>
+
+    <details class="help">
+      <summary>How to get a Gmail app password</summary>
+      <div class="hint">
+        <ol>
+          <li>Go to <b>myaccount.google.com</b> and sign in.</li>
+          <li>Open <b>Security & sign-in</b> in the left sidebar.</li>
+          <li>Turn on <b>2-Step Verification</b> if it isn't already. App
+            passwords don't work without it.</li>
+          <li>Search that page for <b>App passwords</b> and open it.</li>
+          <li>Type a name like <b>Faceplace Marketbook</b> and click <b>Create</b>.</li>
+          <li>Google shows a sixteen-letter password. Copy it into the
+            box above. You can include the spaces or leave them out.</li>
+        </ol>
+        <p style="margin: 10px 0 0">Because you're sending to yourself, Gmail may
+          file the report under <b>Sent Mail</b> instead of your inbox. Click
+          <b>Send a test email</b> and this will check where it landed and fix it
+          if needed.</p>
+      </div>
+    </details>
+  </section>
+</div>
 </main>
 <footer>
   <div class="est" id="est"></div>
@@ -327,8 +536,12 @@ HTML = """<!doctype html>
 </footer>
 <script>
 const LOCATIONS = __LOCATIONS__;
+const BUILTINS = __BUILTINS__;
 const PACES = __PACES__;
 const DEFAULTS = __DEFAULTS__;
+const SAVED = __SAVED__;
+const EMAIL = __EMAIL__;
+const UNITS = __UNITS__;
 // Fixed per-listing costs no pace setting can remove: loading the page and
 // reading its payload, plus saving the photo when thumbnails are on.
 const PAGE_WORK = DEFAULTS.page_work || 3.5;
@@ -352,8 +565,11 @@ function renderCities(labels, selected) {
     d.className = 'tog'; d.dataset.city = label; d.setAttribute('role', 'button');
     d.tabIndex = 0;
     d.setAttribute('aria-pressed', !selected || selected.has(label) ? 'true' : 'false');
+    // The cities that ship with the app have no remove button: they're spaced to
+    // cover the country, and unchecking one skips it just as well.
     d.innerHTML = `<span class="box">✓</span><span class="lbl">${escHtml(label)}</span>`
-      + `<button class="tog-x" title="Remove this city">✕</button>`;
+      + (BUILTINS.includes(label)
+         ? '' : `<button class="tog-x" title="Remove this city">✕</button>`);
     cityWrap.appendChild(d);
   });
 }
@@ -404,10 +620,11 @@ cityWrap.addEventListener('click', async e => {
     return;
   }
   const res = await window.pyRemoveCity(label);
-  const keep = selectedCities(); keep.delete(label);
+  const keep = selectedCities();
+  if (!res.error) keep.delete(label);
   LOCATIONS.length = 0; LOCATIONS.push(...res.cities);
   renderCities(res.cities, keep);
-  sayCity(`Removed ${label}.`);
+  sayCity(res.error || `Removed ${label}.`, !!res.error);
   refresh();
 });
 $('allCities').onclick = () => {
@@ -489,15 +706,298 @@ $('query').addEventListener('input', refresh);
 ['min_price','max_price','exclude','limit','descriptions_budget']
   .forEach(id => $(id).addEventListener('input', refresh));
 
-$('start').onclick = () => { $('start').disabled = true; window.pySubmit(collect()); };
+$('start').onclick = () => {
+  $('start').disabled = true;
+  window.pySubmit({action: 'sweep', ...collect()});
+};
 $('cancel').onclick = () => window.pyCancel();
 document.addEventListener('keydown', e => {
-  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !$('start').disabled) $('start').click();
+  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !$('start').disabled
+      && tab === 'new') $('start').click();
   if (e.key === 'Escape') window.pyCancel();
 });
 
+// ---------------------------------------------------------------- tabs
+let tab = 'new';
+const PANES = {new: 'paneNew', saved: 'paneSaved', email: 'paneEmail'};
+const TABS = {new: 'tabNew', saved: 'tabSaved', email: 'tabEmail'};
+
+function showTab(which) {
+  tab = which;
+  Object.entries(PANES).forEach(([k, id]) => { $(id).hidden = k !== which; });
+  Object.entries(TABS).forEach(([k, id]) =>
+    $(id).setAttribute('aria-selected', k === which ? 'true' : 'false'));
+  // Start sweep only means something on the search tab.
+  $('start').hidden = which !== 'new';
+  $('est').hidden = which !== 'new';
+  $('cancel').textContent = which === 'new' ? 'Cancel' : 'Close';
+  if (which === 'saved') renderSaved();
+  if (which === 'email') loadSchedState();
+}
+Object.entries(TABS).forEach(([k, id]) => { $(id).onclick = () => showTab(k); });
+
+function say(id, msg, kind) {
+  const el = $(id);
+  el.hidden = !msg;
+  el.textContent = msg || '';
+  el.className = 'note' + (kind ? ' ' + kind : '');
+}
+
+// ------------------------------------------------- saving a scheduled search
+UNITS.forEach(u => {
+  const o = document.createElement('option');
+  o.value = u;
+  o.textContent = u.charAt(0).toUpperCase() + u.slice(1);
+  $('save_unit').appendChild(o);
+});
+$('save_unit').value = UNITS.includes('days') ? 'days' : UNITS[0];
+
+let editingId = null;
+
+function scheduleFields() {
+  return {
+    name: $('save_name').value.trim(),
+    email_to: $('save_email').value.trim(),
+    interval: {every: Number($('save_every').value) || 1,
+               unit: $('save_unit').value},
+  };
+}
+
+async function checkWarnings() {
+  const res = await window.pyCheckSchedule({...scheduleFields(), id: editingId});
+  say('saveWarn', (res.warnings || []).join(' '), 'bad');
+}
+['save_every', 'save_unit'].forEach(id =>
+  $(id).addEventListener('change', checkWarnings));
+
+$('saveSearch').onclick = async () => {
+  const btn = $('saveSearch');
+  btn.disabled = true;
+  say('saveMsg', 'Saving…');
+  const payload = {...collect(), ...scheduleFields(), id: editingId};
+  const res = await window.pySaveSearch(payload);
+  btn.disabled = false;
+  if (res.error) { say('saveMsg', res.error, 'bad'); return; }
+  say('saveWarn', (res.warnings || []).join(' '), 'bad');
+  say('saveMsg', res.message, 'ok');
+  SAVED.length = 0; SAVED.push(...(res.searches || []));
+  stopEditing();
+};
+
+function startEditing(s) {
+  editingId = s.id;
+  $('query').value = s.query || '';
+  $('exclude').value = s.exclude || '';
+  $('min_price').value = s.min_price == null ? '' : s.min_price;
+  $('max_price').value = s.max_price == null ? '' : s.max_price;
+  $('limit').value = s.limit == null ? '' : s.limit;
+  $('exact').setAttribute('aria-pressed', s.exact ? 'true' : 'false');
+  $('do_descriptions').setAttribute('aria-pressed',
+    s.do_descriptions === false ? 'false' : 'true');
+  $('do_thumbs').setAttribute('aria-pressed',
+    s.do_thumbs === false ? 'false' : 'true');
+  pace = s.pace || 'fast';
+  $('save_name').value = s.name || '';
+  $('save_email').value = s.email_to || '';
+  $('save_every').value = (s.interval && s.interval.every) || 1;
+  $('save_unit').value = (s.interval && s.interval.unit) || 'days';
+  const keep = new Set(s.cities || []);
+  cityWrap.querySelectorAll('.tog').forEach(t =>
+    t.setAttribute('aria-pressed', keep.has(t.dataset.city) ? 'true' : 'false'));
+  $('saveSearch').textContent = 'Update saved search';
+  $('cancelEdit').hidden = false;
+  say('saveMsg', `Editing “${s.name}”. Change anything above, then update it.`);
+  showTab('new');
+  refresh();
+  checkWarnings();
+}
+
+function stopEditing() {
+  editingId = null;
+  $('saveSearch').textContent = 'Save scheduled search';
+  $('cancelEdit').hidden = true;
+}
+$('cancelEdit').onclick = () => { stopEditing(); say('saveMsg', ''); };
+
+// ------------------------------------------------------- the saved searches list
+function renderSaved() {
+  const wrap = $('savedList');
+  if (!SAVED.length) {
+    wrap.innerHTML = '<div class="empty">No saved searches yet. Set one up at '
+      + 'the bottom of the New search tab.</div>';
+    return;
+  }
+  wrap.innerHTML = SAVED.map(s => `
+    <div class="card${s.enabled ? '' : ' off'}" data-id="${escHtml(s.id)}">
+      <div class="top">
+        <span class="nm">${escHtml(s.name)}</span>
+        <span class="pill${s.enabled ? '' : ' paused'}">${
+          s.enabled ? escHtml(s.every_text) : 'paused'}</span>
+      </div>
+      <div class="det">
+        “${escHtml(s.query)}” across ${(s.cities || []).length} ${
+          (s.cities || []).length === 1 ? 'city' : 'cities'}<br>
+        Last run ${escHtml(s.last_text)} &middot; next ${escHtml(s.next_text)}<br>
+        ${s.tracking == null ? '' : escHtml(String(s.tracking)) + ' listings tracked'}
+        ${s.email_to ? ' &middot; reports to ' + escHtml(s.email_to) : ''}
+      </div>
+      <div class="acts">
+        <button class="mini" data-act="run">Run now</button>
+        <button class="mini" data-act="edit">Edit</button>
+        <button class="mini" data-act="toggle">${s.enabled ? 'Pause' : 'Resume'}</button>
+        <button class="mini" data-act="del">Delete</button>
+      </div>
+    </div>`).join('');
+}
+
+$('refreshSaved').onclick = async () => {
+  const res = await window.pyListSearches();
+  if (res.error) { say('savedMsg', res.error, 'bad'); return; }
+  SAVED.length = 0; SAVED.push(...(res.searches || []));
+  renderSaved();
+  say('savedMsg', '');
+};
+
+$('savedList').addEventListener('click', async e => {
+  const btn = e.target.closest('button[data-act]');
+  if (!btn) return;
+  const card = btn.closest('.card');
+  const id = card.dataset.id;
+  const s = SAVED.find(x => x.id === id);
+  const act = btn.dataset.act;
+
+  if (act === 'edit') { startEditing(s); return; }
+  if (act === 'run') {
+    // Running needs the browser and the Facebook session, so the window has to
+    // close first — it's holding the only Chromium this tool can use.
+    window.pySubmit({action: 'run_saved', id: id});
+    return;
+  }
+  if (act === 'toggle') {
+    const res = await window.pyUpdateSearch(id, {enabled: !s.enabled});
+    if (res.error) { say('savedMsg', res.error, 'bad'); return; }
+    SAVED.length = 0; SAVED.push(...(res.searches || []));
+    renderSaved();
+    say('savedMsg', `“${s.name}” is now ${s.enabled ? 'paused' : 'active'}.`, 'ok');
+    return;
+  }
+  if (act === 'del') {
+    // Deleting is permanent, so it asks for a second click.
+    if (!btn.dataset.confirm) {
+      $('savedList').querySelectorAll('button[data-confirm]').forEach(o => {
+        delete o.dataset.confirm; o.textContent = 'Delete';
+      });
+      btn.dataset.confirm = '1';
+      btn.textContent = 'Really delete?';
+      return;
+    }
+    const res = await window.pyDeleteSearch(id);
+    if (res.error) { say('savedMsg', res.error, 'bad'); return; }
+    SAVED.length = 0; SAVED.push(...(res.searches || []));
+    if (editingId === id) stopEditing();
+    renderSaved();
+    say('savedMsg', `Deleted “${s.name}”. Its results folder is still on disk.`,
+        'ok');
+  }
+});
+
+// -------------------------------------------------------------- email settings
+function fillMail(cfg) {
+  $('mail_address').value = cfg.address || '';
+  $('mail_password').value = cfg.app_password || '';
+  $('mail_to').value = cfg.default_to || '';
+  $('mail_provider').value = cfg.provider || 'gmail';
+  $('mail_host').value = cfg.host || '';
+  $('mail_port').value = cfg.port || '';
+  mailHostRow();
+}
+function mailHostRow() {
+  $('mailHostRow').hidden = $('mail_provider').value !== 'other';
+}
+$('mail_provider').addEventListener('change', mailHostRow);
+fillMail(EMAIL);
+
+$('saveMail').onclick = async () => {
+  const res = await window.pySaveEmail({
+    address: $('mail_address').value.trim(),
+    app_password: $('mail_password').value.trim(),
+    default_to: $('mail_to').value.trim(),
+    provider: $('mail_provider').value,
+    host: $('mail_host').value.trim(),
+    port: Number($('mail_port').value) || 587,
+  });
+  say('mailMsg', res.error || res.message, res.error ? 'bad' : 'ok');
+};
+
+$('testMail').onclick = async () => {
+  const btn = $('testMail');
+  btn.disabled = true;
+  say('mailMsg', 'Sending…');
+  const res = await window.pyTestEmail();
+  btn.disabled = false;
+  say('mailMsg', res.error || res.message, res.error ? 'bad' : 'ok');
+};
+
+// ------------------------------------------------------------ automatic runs
+async function loadSchedState() {
+  const res = await window.pyScheduleState();
+  // Installed and blocked is its own state: calling it "on" would contradict the
+  // instructions sitting right underneath.
+  const stuck = res.installed && (res.problems || []).length > 0;
+  $('schedDot').className = 'dot' + (stuck ? ' stuck' : res.installed ? ' on' : '');
+  $('schedState').textContent = !res.installed ? 'Automatic runs are off'
+    : stuck ? 'Automatic runs are on, but blocked' : 'Automatic runs are on';
+  $('schedHint').innerHTML = res.hint || '';
+  showProblems(res.problems);
+  $('schedOn').hidden = res.installed;
+  $('schedOff').hidden = !res.installed;
+}
+
+// Paths in these messages have to be copyable, so they're set as text inside
+// <code> rather than pasted into innerHTML.
+function showProblems(problems) {
+  const box = $('schedProblem');
+  box.textContent = '';
+  box.hidden = !(problems && problems.length);
+  (problems || []).forEach(text => {
+    const p = document.createElement('p');
+    text.split('\\n').forEach((line, i) => {
+      if (i) p.appendChild(document.createElement('br'));
+      const bare = line.trim();
+      if (i && bare.startsWith('/')) {
+        const c = document.createElement('code');
+        c.textContent = bare;
+        p.appendChild(c);
+      } else {
+        p.appendChild(document.createTextNode(line));
+      }
+    });
+    box.appendChild(p);
+  });
+}
+$('schedOn').onclick = async () => {
+  say('schedMsg', 'Setting it up, this takes a few seconds…');
+  const res = await window.pySetSchedule(true);
+  await loadSchedState();
+  if (res.ok) {
+    say('schedMsg', (res.messages || []).join('\\n\\n'), 'ok');
+  } else {
+    // A refusal is several paragraphs of instructions, so it belongs in the
+    // problem box rather than a one-line status. Rendered after the state
+    // reload so the reload can't wipe it.
+    $('schedMsg').hidden = true;
+    showProblems(res.messages);
+  }
+};
+$('schedOff').onclick = async () => {
+  const res = await window.pySetSchedule(false);
+  await loadSchedState();
+  say('schedMsg', (res.messages || []).join('\\n\\n'), 'ok');
+};
+
 if (DEFAULTS.query) $('query').value = DEFAULTS.query;
 if (DEFAULTS.exclude) $('exclude').value = DEFAULTS.exclude;
+showTab('new');
 refresh();
 $('query').focus();
 </script>
@@ -505,7 +1005,20 @@ $('query').focus();
 """
 
 
-def render(locations, paces, defaults):
+def _call(hooks, name, default=None):
+    """Reads a value out of a hook for the initial page render. A missing or
+    broken hook must not stop the settings window from opening at all."""
+    fn = hooks.get(name)
+    if not fn:
+        return default
+    try:
+        return fn()
+    except Exception:
+        return default
+
+
+def render(locations, paces, defaults, saved=(), email=None,
+           units=("hours", "days"), builtins=()):
     defaults = dict(defaults or {})
     # 0 / None means "never ask", which the form shows as an empty field.
     budget = defaults.get("descriptions_budget") or ""
@@ -513,22 +1026,41 @@ def render(locations, paces, defaults):
             .replace("__FONTS__", FONTS)
             .replace("__CSS__", CSS)
             .replace("__BUDGET__", str(budget))
+            .replace("__BUILTINS__", json.dumps(list(builtins)))
             .replace("__LOCATIONS__", json.dumps(list(locations)))
             .replace("__PACES__", json.dumps(paces))
+            .replace("__SAVED__", json.dumps(list(saved)))
+            .replace("__EMAIL__", json.dumps(email or {}))
+            .replace("__UNITS__", json.dumps(list(units)))
             .replace("__DEFAULTS__", json.dumps(defaults)))
 
 
 def collect_settings(locations, paces, defaults=None, headless=False,
-                     on_add=None, on_remove=None):
-    """Opens the settings window and blocks until Start or Cancel.
+                     on_add=None, on_remove=None, hooks=None, on_ready=None,
+                     builtins=()):
+    """Opens the settings window and blocks until it's done.
 
-    `on_add(label, text)` should return (labels, error) and `on_remove(label)`
-    a list of labels; both persist the change. Without them the city list is
-    read-only.
+    `on_add(label, text)` and `on_remove(label)` should both return
+    (labels, error) and persist the change. Without them the city list is
+    read-only. Cities named in `builtins` get no remove button.
 
-    Returns the settings dict, or None if cancelled or the window was closed.
+    `hooks` wires up the saved-search and email tabs. Every entry is optional;
+    whatever is missing simply leaves that part of the window inert, so this
+    module still works with nothing but the search form. See scheduling.ui_hooks
+    for the implementations.
+
+    `on_ready(page)` is called once the page is loaded, which is how the test
+    suite clicks through this window without a person in front of it.
+
+    Returns whatever the page submitted — a dict with an "action" key — or None
+    if cancelled or the window was closed.
     """
-    html = render(locations, paces, defaults)
+    hooks = dict(hooks or {})
+    html = render(locations, paces, defaults,
+                  saved=_call(hooks, "list_searches", default={}).get("searches", []),
+                  email=_call(hooks, "email_config", default={}),
+                  units=hooks.get("units") or ("hours", "days"),
+                  builtins=builtins)
     state = {}
     known = list(locations)
 
@@ -547,23 +1079,59 @@ def collect_settings(locations, paces, defaults=None, headless=False,
         return {"cities": labels, "added": added}
 
     def remove_city(label):
+        if not on_remove:
+            return {"cities": list(known)}
         try:
-            known[:] = list(on_remove(label)) if on_remove else known
-        except Exception:
-            pass
-        return {"cities": list(known)}
+            labels, error = on_remove(label)
+        except Exception as e:
+            return {"cities": list(known), "error": f"Couldn't remove that: {e}"}
+        known[:] = list(labels)
+        return {"cities": list(known), "error": error}
+
+    def hook(name):
+        """Wraps a hook so a bug in it shows up as a message in the window
+        rather than an exception the page never hears back from — an unanswered
+        expose_function call leaves the button spinning forever."""
+        def call(*args):
+            fn = hooks.get(name)
+            if not fn:
+                return {"error": "That isn't available in this window."}
+            try:
+                return fn(*args)
+            except Exception as e:
+                return {"error": f"{type(e).__name__}: {e}"}
+        return call
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=headless,
-                                    args=["--window-size=1000,1120"])
+                                    args=["--window-size=1000,1180"])
         page = browser.new_page(**({} if not headless
-                                   else {"viewport": {"width": 1000, "height": 1120}}),
+                                   else {"viewport": {"width": 1000, "height": 1180}}),
                                 no_viewport=not headless)
-        page.expose_function("pySubmit", lambda data: state.update(done=True, data=data))
-        page.expose_function("pyCancel", lambda: state.update(done=True, data=None))
+        # First answer wins: a stray second click, or a close that races a
+        # submit, must not replace what the user already asked for.
+        def finish(data):
+            if not state.get("done"):
+                state.update(done=True, data=data)
+
+        page.expose_function("pySubmit", finish)
+        page.expose_function("pyCancel", lambda: finish(None))
         page.expose_function("pyAddCity", add_city)
         page.expose_function("pyRemoveCity", remove_city)
+        for js_name, hook_name in (
+                ("pyListSearches", "list_searches"),
+                ("pySaveSearch", "save_search"),
+                ("pyUpdateSearch", "update_search"),
+                ("pyDeleteSearch", "delete_search"),
+                ("pyCheckSchedule", "check_schedule"),
+                ("pySaveEmail", "save_email"),
+                ("pyTestEmail", "test_email"),
+                ("pyScheduleState", "schedule_state"),
+                ("pySetSchedule", "set_schedule")):
+            page.expose_function(js_name, hook(hook_name))
         page.set_content(html)
+        if on_ready:
+            on_ready(page)
         try:
             while not state.get("done"):
                 if page.is_closed():

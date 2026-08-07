@@ -8,7 +8,7 @@ Turn a results CSV into a single self-contained HTML gallery.
 
 Writes gallery.html next to the CSV. Locally downloaded thumbnails are baked
 into the file as data URIs by default, so the gallery is one portable file
-with no dependency on the thumbs/ folder, relative paths, or Facebook URLs.
+with no dependency on the thumbnails/ folder, relative paths, or Facebook URLs.
 Pass --no-embed to link the thumbnails instead and keep the file small.
 """
 import argparse
@@ -536,11 +536,11 @@ HTML = """<!doctype html>
 """
 
 
-def embed_images(rows, base_dir):
+def embed_images(rows, base_dir, budget_mb=EMBED_BUDGET_MB):
     """Rewrite local thumbnail paths to data URIs so the HTML stands alone.
-    Stops embedding once EMBED_BUDGET_MB is used up and leaves the rest as
-    paths, so a huge multi-city run can't produce an unopenable file."""
-    budget = EMBED_BUDGET_MB * 1024 * 1024
+    Stops embedding once the budget is used up and leaves the rest as paths, so
+    a huge multi-city run can't produce an unopenable file."""
+    budget = budget_mb * 1024 * 1024
     used, done, skipped = 0, 0, 0
     for r in rows:
         img = r.get("image") or ""
@@ -563,31 +563,38 @@ def embed_images(rows, base_dir):
     return done, skipped, used
 
 
-def build(csv_in, out=None, embed=True):
+def build(csv_in, out=None, embed=True, budget_mb=EMBED_BUDGET_MB, only_ids=None,
+          quiet=False):
+    """only_ids limits the gallery to those item_ids, which is how the emailed
+    "just the new listings" attachment is built from the same CSV."""
     src = Path(csv_in)
     with open(src, newline="", encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
     seen, uniq = set(), []
+    keep = set(only_ids) if only_ids is not None else None
     for r in rows:
         iid = r.get("item_id")
+        if keep is not None and iid not in keep:
+            continue
         if iid and iid not in seen:
             seen.add(iid)
             uniq.append(r)
     note = ""
     if embed:
-        done, skipped, used = embed_images(uniq, src.resolve().parent)
+        done, skipped, used = embed_images(uniq, src.resolve().parent, budget_mb)
         note = f", {done} images baked in ({used / 1e6:.1f} MB)"
         if skipped:
-            note += f"; {skipped} left as file links (over {EMBED_BUDGET_MB} MB budget)"
+            note += f"; {skipped} left as file links (over {budget_mb} MB budget)"
     # "</" must not appear inside a <script> block; escape it in the JSON.
     data = json.dumps(uniq, ensure_ascii=False).replace("</", "<\\/")
     out = Path(out) if out else src.with_name("gallery.html")
     out.write_text(HTML.replace("__DATA__", data), encoding="utf-8")
-    print(f"Wrote {out} ({len(uniq)} listings{note}).")
-    if not embed:
-        print("  Keep the thumbs/ folder next to the HTML, and open the file "
-              "directly in a browser — preview panes often can't resolve "
-              "relative image paths.")
+    if not quiet:
+        print(f"Wrote {out} ({len(uniq)} listings{note}).")
+        if not embed:
+            print("  Keep the thumbnails/ folder next to the HTML, and open the "
+                  "file directly in a browser — preview panes often can't "
+                  "resolve relative image paths.")
     return out
 
 

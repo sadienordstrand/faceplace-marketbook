@@ -9,7 +9,41 @@ continental US, throws out the things that don't match, collects each listing's
 photo and description, and builds a single web page you can search, sort, and
 prune.
 
+You can also [save a search and set it up to run automatically](#automated-searches)
+on a schedule, and have it email you what's new — and what sold — since last time.
+
 Works on Windows and Mac.
+
+---
+
+## What you get
+
+Every run builds a gallery like this one, saved on your own computer. You can
+search it, sort it by price or year, filter by city, and throw out anything you
+don't want to see again.
+
+![The gallery a run produces](docs/images/gallery.jpg)
+
+Each listing keeps its photo, price, location, mileage where the seller gave one,
+and the opening lines of the description, with a link straight to the listing on
+Facebook.
+
+<img src="docs/images/gallery-card.jpg" alt="A single listing card" width="300">
+
+Searches are set up in a window like this — no typing commands. Every setting has
+an explanation underneath it.
+
+![The search setup window](docs/images/settings-search.png)
+
+Saved searches run on a schedule you choose, and can be paused, edited or run on
+the spot.
+
+![The saved searches tab](docs/images/settings-saved.png)
+
+When a scheduled search finishes, it emails you a summary of what's new and what
+has sold or been taken down since last time.
+
+![An emailed report](docs/images/email-report.png)
 
 ---
 
@@ -45,10 +79,13 @@ downloads.
 
 On the project's GitHub page, click the green **Code** button, then **Download
 ZIP**. Open the downloaded ZIP to unpack it, and move the resulting folder
-somewhere you'll find it again, like your Documents folder.
+somewhere you'll find it again.
 
 Keep everything in that folder together. The app stores your searches and
-results inside it.
+results inside it. Anywhere you'll find it again is fine — Documents works, so
+does the desktop. (If you later set up [automated searches](#automated-searches)
+on a Mac, there's one folder location that needs changing, and that section says
+so when you get there.)
 
 ### Step 2 — Start it
 
@@ -132,7 +169,19 @@ including any two-factor code or captcha. The app notices when you're through
 and carries on by itself.
 
 It remembers the session, so you shouldn't have to do this again for a long
-while. If it ever asks again, just log in again.
+while — usually a few weeks, until Facebook expires it.
+
+**When it does expire, log in through the app, not your normal browser.** The app
+keeps its own private browser login, separate from Safari, Chrome and Edge, so
+signing into Facebook the usual way has no effect on it. You have two ways to
+renew it, and neither needs the command line:
+
+- Double-click **Log into Facebook** (`Log into Facebook (Mac).command` or
+  `Log into Facebook (Windows).bat`). A Facebook window opens, you log in, and it
+  saves the session and closes. Nothing gets searched. This is the one to use
+  when a scheduled run emails you saying the login expired.
+- Or just start a search as usual. If the login has expired you'll be asked for it
+  before the sweep begins, exactly as you were the first time.
 
 ### Step 4 — Set your search radius
 
@@ -147,9 +196,12 @@ notification popups. Then come back to the terminal and press **Enter**.
 
 ## Running a search
 
-After the login, a **Search Setup** window opens. Fill it in and click **Start
-sweep**. Each setting has a short explanation underneath it in the window
-itself, so this is only the shape of it:
+After the login, a **Search Setup** window opens. It has three tabs across the
+top — **New search** is the one you want now; the other two are for
+[automated searches](#automated-searches).
+
+Fill in the New search tab and click **Start sweep**. Each setting has a short
+explanation underneath it in the window itself; this is just a brief overview:
 
 - **Query** — what you're looking for, e.g. `land rover defender 110`. More
   words narrows the results.
@@ -201,10 +253,31 @@ address. To get it:
 3. Copy the whole web address from the address bar.
 
 Paste that into the box at the bottom of the **Cities** section, give it a name
-(like "City, ST") and click **Add city**. The app pulls out the part it needs
-and tells you if the link isn't one it can use. Cities you add are saved and
-will be there next time. To get rid of one, hover over it and click the **✕**,
-then click again to confirm.
+(like "City, ST") and click **Add city**. The app pulls out the part it needs and
+tells you if the link isn't one it can use. Cities you add are saved and will be
+there next time. To get rid of one, hover over it and click the **✕**, then click
+again to confirm.
+
+**Only cities you added yourself can be removed.** The twelve that come with the
+app are permanent, because their spacing is what makes nationwide coverage work
+and removing one leaves a hole nothing would show you afterwards. To leave one
+out of a search, untick it — that has exactly the effect you want and it's not
+permanent.
+
+Your cities are kept in their own file, `my_locations.json`, separate from the
+twelve in `locations.json`. Nothing you do in the window ever changes that second
+file, so an update to the app can't lose your cities and adding one can't damage
+the built-in list.
+
+**If the address you paste isn't really a city, you won't find out until a run.**
+The app checks that the link has a city in it, but it can't tell a real city from
+a plausible-looking one — only Facebook knows that. Paste something Facebook
+doesn't recognise and it quietly answers with results for *whatever city your
+Facebook account is currently set to*, which would file another city's listings
+under your new name. So the app watches for that during the run: if it happens,
+the city is skipped, the terminal says which city Facebook substituted, and a
+scheduled run puts a warning at the top of its email. Remove the bad entry and
+add it again from a real Marketplace address.
 
 ---
 
@@ -251,7 +324,7 @@ each folder:
   file, so you can move it, keep it, or email it and it still works.
 - **`results.csv`** — the same listings as a spreadsheet, for Excel or Numbers.
 - **`run.json`** — a record of what was searched and what came back.
-- **`thumbs/`** — the photos as individual files.
+- **`thumbnails/`** — the photos as individual files.
 
 In the gallery you can search the text, filter by which city found it, and click
 any card for the full description. The **✕** in a card's corner hides listings
@@ -265,14 +338,295 @@ listing, collects at the bottom whichever direction you sort.
 
 ---
 
+## Automated searches
+
+You can save a search under a name and have the app run it on its own — every
+day, every few hours, whatever you pick — and email you what turned up. It only
+looks up descriptions and photos for listings it has never seen before, so after
+the first run these are much quicker.
+
+Each report tells you what's new, what's still there, and what sold or was
+taken down since last time.
+
+You need an email account the app can send from. Gmail is what these instructions
+use because it's the most common and the fiddliest; Outlook, Hotmail, Live,
+iCloud and any other server you know the address of all work too. See
+[using something other than Gmail](#using-something-other-than-gmail).
+
+### On a Mac, check where this folder lives first
+
+macOS refuses background tasks access to your **Documents**, **Desktop** and
+**Downloads** folders. Searches you start yourself are unaffected, but a
+scheduled one can't read anything it needs from those three places, so it will
+never run.
+
+The fix takes ten seconds: quit the app, open Finder, press **Command-Shift-H**
+to go to your home folder, and drag the Faceplace Marketbook folder there. Then
+start it again from its new home. Nothing is lost by moving it — your searches,
+results and Facebook login all live inside the folder and travel with it.
+
+If you'd rather leave the folder where it is, the app will tell you exactly what
+to do instead when you turn automatic runs on in Part 3. Windows has no such
+restriction.
+
+### Before you start
+
+You need two things: an app password for your email account, and permission for
+your computer to wake itself up. Both are one-time setup. Do them in this order.
+
+### Part 1 — Give the app an email password
+
+This is a special password just for this app. Your real Gmail password isn't used.
+
+![The Email and schedule tab](docs/images/settings-schedule.png)
+
+1. Start the app the normal way (double-click the Start file).
+2. Click the **Email & schedule** tab at the top.
+3. Leave that window open and go do this in your web browser:
+   1. Go to **myaccount.google.com** and sign in.
+   2. Click **Security & sign-in** on the left sidebar.
+   3. Find **2-Step Verification**. If it's off, turn it on and follow Google's
+      steps. You can't create an app password without it.
+   4. Back on the Security page, use the search box at the top of the page and
+      type **app passwords**. Click "App passwords" in the list of search results.
+   5. Type a name — **Faceplace Marketbook** is fine — and click **Create**.
+   6. Google shows **a sixteen-letter password**. Leave that window open.
+4. Back in the app: type your Gmail address in **Your email address**, and those
+   sixteen letters in **App password**. Spaces don't matter.
+5. Click **Save**, then click **Send a test email**.
+6. Check your email. You should have a message from yourself titled "Faceplace
+   Marketbook: test message".
+
+If it doesn't arrive, the app will tell you why in the box under the buttons.
+
+**One thing to know about sending mail to yourself:** Gmail sometimes files a
+message you sent yourself under **Sent Mail** and never puts it in your inbox.
+The test above checks for this, and if it happens, the app switches to placing
+reports in your inbox directly. You don't have to do anything — just run the
+test.
+
+#### If the address or password is wrong
+
+The app checks the *shape* of what you typed the moment you click **Save**: a
+missing @, a space in the middle, a password that isn't the sixteen lowercase
+letters Google issues. Those it tells you about immediately, and a mistyped
+address isn't saved at all.
+
+What it can't know without asking the mail server is whether the address and
+password are *the right ones*. That's what **Send a test email** is for, and it's
+worth the ten seconds — without it, the first sign of a wrong password is a
+scheduled run at 5am that finishes, writes all its results, and can't send them.
+Nothing is lost when that happens (the gallery is still on your computer, and the
+next run picks up where it left off) but you won't hear about it by email, for the
+obvious reason.
+
+One quirk to know, because it sends people looking in the wrong place: if the
+**address** is wrong, the mail server rejects the login and reports it as a bad
+password. The app says so in its message, but if a password you're sure about is
+being refused, check the address for a typo too.
+
+#### Using something other than Gmail
+
+You don't need a Gmail account. Pick your provider from the **Provider** menu:
+
+- **Outlook / Hotmail / Live** and **iCloud** work the same way, and also need an
+  app password created in their own account settings rather than your normal one.
+- **Other** lets you type in any mail server's address and port, which is the
+  route for a work account or your own domain.
+
+Two things hold whichever you choose. The address you enter has to be the mailbox
+you're logging into, because mail servers won't let you send as somebody else.
+The address reports are *sent to* can be anything at all — a different account, a
+partner, a phone-number-to-text gateway. The Gmail sent-to-yourself quirk above
+only applies to Gmail.
+
+### Part 2 — Save a search
+
+1. Click the **New search** tab.
+2. Set up your search exactly as you would for a normal run: query, cities, price
+   limits, exclusions.
+3. Scroll to the bottom, to **Run this on a schedule**.
+4. Give it a name. This becomes the folder name and the subject line of your
+   emails, so make it something you'll recognize.
+5. Choose how often, using the number box and the **Hours / Days** menu.
+6. Click **Save scheduled search**.
+
+**Daily searches run every morning.** Searches set in hours run every so many hours
+from when the last one started.
+
+> **Don't set up too many, and don't run them too often.** Every run is a full
+> sweep of every city you picked, and a lot of automated traffic is what gets
+> Facebook accounts limited or banned. **Once a day is usually plenty, 
+> and more often than every 6 hours is asking for trouble. Two or
+> three saved searches is a sensible ceiling. The app warns you when you go past
+> these, but it won't stop you — it's your account.
+
+The **Saved searches** tab lists everything you've saved. From there you can run
+one immediately, edit it, pause it, or delete it.
+
+**Neither pausing nor deleting touches your results.** Pausing just stops it
+running, and you can resume it later. Deleting removes the schedule and the saved
+settings; the results folder, the gallery, the photos and everything the search
+ever found stay exactly where they are on your computer, and every listing it
+ever collected is still in the app's database.
+
+The one thing deleting does lose is the search's memory of what it had already
+seen. If you save a new search with the same name later, it writes to the same
+results folder again, but its first report will call everything new, because it
+has nothing to compare against any more.
+
+### Part 3 — Let your computer wake itself up
+
+A scheduled search can't run if the computer is asleep and stays asleep. This
+part gives it permission to wake up, do the run, and go back to sleep.
+
+1. In the app, go to the **Email & schedule** tab.
+2. Click **Turn automatic runs on**. It takes a few seconds, because the app then
+   checks that the schedule it just set up can actually reach your files.
+3. On a Mac, there will be a prompt asking for your password. This is
+   macOS asking, not the app — waking a sleeping Mac on a schedule needs
+   administrator rights.
+4. Read the message that appears. It tells you if anything is left to do by hand.
+
+Then there are a few system settings you might want to change. **You don't have to
+change any of them.** Automatic runs work without them — the difference is how
+reliably a run happens when you're not around. Each one below says what it buys
+you, so you can decide which trade-offs you care about.
+
+The one thing to understand: the app asks macOS to wake the computer a couple of
+minutes before each run. A Mac that's awake, or asleep in the ordinary way, will
+take that appointment. What defeats it is the machine being switched off, or in
+the deepest kind of sleep, or in a mode that suppresses background work.
+
+#### On a Mac
+
+Open **System Settings**, click **Battery**, then **Options…** at the bottom.
+
+- **Wake for network access → Always.** Worth doing. This is what lets a sleeping
+  Mac come back for its appointment. On *Only on Power Adapter* — the usual
+  default — a scheduled run on battery is skipped and happens the next time the
+  machine is awake instead, and the report tells you it ran late. Nothing is
+  lost either way.
+- **Prevent automatic sleeping on power adapter when the display is off.** Optional,
+  and you asked the right question if you're wondering why it's here: sleeping
+  *is* fine, because the Mac gets woken back up. Turning this on just removes the
+  wake-up from the equation entirely, which is the difference between a run that
+  starts within a minute of its time and one that starts within a few. If you'd
+  rather your Mac sleep normally, leave it alone.
+- **Low Power Mode → Never**, or **Only on Battery** if you want it while
+  unplugged. This one matters more than it looks: Low Power Mode holds back
+  background work, so a run scheduled during it can be delayed or skipped
+  outright.
+
+**Closing the lid.** With the lid shut and no display attached, a Mac laptop goes
+into a much deeper sleep, and scheduled wake-ups stop being dependable. If you
+want overnight runs, leave the lid open and let the screen turn itself off — the
+screen going dark changes nothing.
+
+**With external monitors, a shut lid is fine.** A Mac driving an external display
+stays in the ordinary kind of sleep, so it wakes for a run normally. That's the
+setup to use if you don't want to leave a laptop open.
+
+**A Mac that's been shut down won't run anything.** Macs don't shut down on their
+own, so this only happens if you choose Shut Down yourself. If you do, and you
+have FileVault on (most people do), the Mac can't finish starting up without
+someone typing the password, so scheduled runs stay stopped until you unlock it.
+
+#### On Windows
+
+**Allow wake timers is the one that actually matters.** On battery, Windows blocks
+wake timers by default, and a blocked wake timer means a sleeping laptop simply
+doesn't wake up for a run. If you only change one thing, change this one.
+
+Press the Windows key, type **Control Panel**, and open it. Then go **Hardware and
+Sound → Power Options → Change plan settings → Change advanced power settings**.
+In the list that appears, expand **Sleep**, then **Allow wake timers**, set
+**both** *On battery* and *Plugged in* to **Enable**, and click **OK**.
+
+The rest are optional:
+
+- **Settings → System → Power & battery → Screen and sleep.** Setting **When
+  plugged in, put my device to sleep after** to **Never** makes runs certain,
+  because there's no waking up to do. Letting it sleep is fine as long as you did
+  the wake timer step above.
+- **Battery saver**, in the same place, holds back background work. If it's set to
+  switch on automatically at a high percentage, a run scheduled while it's active
+  may be delayed.
+- **Closing the lid.** In **Control Panel → Hardware and Sound → Power Options →
+  Choose what closing the lid does**, **Sleep** and **Do nothing** both let runs
+  happen. **Hibernate** and **Shut down** don't — both stop scheduled runs until
+  you turn the computer back on yourself.
+
+### What the emails look like
+
+Each report contains:
+
+- How many listings are new, how many are being tracked, and how many sold or
+  were taken down.
+- Every new listing by name, with a link.
+- Every sold or removed listing by name, with its link, so you can see what you
+  missed.
+- Two attachments: a small gallery of just the new listings, and one of
+  everything currently tracked. Photos are included when they fit; on a big
+  search the attachments drop photos to stay under email size limits, and the
+  message tells you where the full gallery is on your computer.
+
+You'll also get an email if a run couldn't happen:
+
+- **"Please log into Facebook again"** — the saved login expired. Double-click
+  **Log into Facebook** in the app's folder, log in, and you're done; the next
+  scheduled run works again. Logging into Facebook in your normal browser won't
+  fix it, because the app keeps its own separate login.
+- **"The scheduled run failed"** — something else went wrong. The search stays
+  scheduled and tries again next time. The email includes the details.
+
+A report also carries a warning at the top if the run started late, which is what
+you'll see if the computer was asleep or switched off at the scheduled time.
+Nothing is lost — it runs as soon as the machine is available again.
+
+### Where scheduled results live
+
+Scheduled searches write to `runs/saved/<your search name>/` and **rewrite that
+same folder every run**, so the folder always holds the current picture rather
+than one folder per run. Previous reports are kept in a `history/` folder inside
+it.
+
+### Turning it off
+
+- **One search:** *Saved searches* tab → **Pause**. Or **Delete** to remove it;
+  its results folder, gallery and photos all stay on your computer.
+- **All of it:** *Email & schedule* tab → **Turn them off**. Your saved searches
+  stay, they just stop running by themselves.
+
+Nothing you can click in this app deletes results. If you want the disk space
+back, delete the folders inside `runs/` yourself.
+
+---
+
 ## When something goes wrong
 
 **"A leftover browser window is still using this app's saved Facebook login."**
 A browser window from a previous run never closed. Close any stray Chromium
 window and start again.
 
-**It asks me to log into Facebook again.** The saved session expired, or
-Facebook wants to re-check. Just log in again.
+**It asks me to log into Facebook again.** The saved session expired, or Facebook
+wants to re-check. Double-click **Log into Facebook** in the app's folder and sign
+in there — signing in with Safari, Chrome or Edge won't help, because the app
+keeps its own separate browser login. See
+[Step 3](#step-3--log-into-facebook).
+
+**One of my cities came back with nothing, or the wrong place.** If the terminal
+said Facebook didn't recognise a city, the address used to add it wasn't a real
+Marketplace city. Remove it (hover, click the **✕**) and add it again from a live
+Marketplace address. See [Adding your own cities](#adding-your-own-cities).
+
+**I can't remove one of the built-in cities.** That's deliberate — untick it
+instead. Only cities you added yourself can be removed.
+
+**No email arrived and I never saw an error.** Click **Send a test email** on the
+*Email & schedule* tab. A wrong address or password can't be detected until the
+mail server is asked, and a scheduled run that can't send has no way to tell you
+by email. Your results are still on your computer either way.
 
 **Hardly any results, or none.** Usually the search term is too specific, or the
 excluded terms are too broad. Try fewer words. The other likely cause is the
@@ -283,6 +637,38 @@ at that pause (Step 4 above).
 **Some pictures say "image expired".** Facebook's photo links go stale within
 hours. The app saves photos as it goes to avoid this, but a few can slip through
 on a very long run. Running the search again picks them up.
+
+**A scheduled search never ran.** Work through these in order:
+
+1. Is it paused? Check the *Saved searches* tab.
+2. Are automatic runs on? Check the *Email & schedule* tab — the dot should be
+   green. An orange dot and **on, but blocked** means the schedule exists but
+   can't reach your files; the instructions underneath say what to do.
+3. Was the computer asleep with the lid shut, hibernating, or switched off? Go
+   back through [Part 3](#part-3--let-your-computer-wake-itself-up).
+4. If a run started but nothing arrived, the email settings are the likely cause.
+   Click **Send a test email**.
+
+**I moved the app's folder and scheduled runs stopped.** The schedule still
+points at the old location. Go to *Email & schedule*, click **Turn them off**,
+then **Turn automatic runs on** again. The tab warns about this when it notices.
+
+**A scheduled run happened but no email came.** Look in **Sent Mail** as well as
+your inbox. Then click **Send a test email** on the *Email & schedule* tab — it
+reports exactly what went wrong.
+
+**"Not starting: a scheduled run has been running since…"** Two runs can't share
+one Facebook login, so a manual run won't start while a scheduled one is going.
+Wait for it to finish. If you're sure nothing is really running — for instance the
+computer lost power partway through a run — the app clears the leftover marker by
+itself after 8 hours, or you can delete the file `.schedule/run.lock` in the app's
+folder.
+
+**A listing I know is sold still shows up.** The app only removes a listing when
+it can positively confirm it's gone, because being missing from Facebook's search
+results doesn't mean it was taken down — Facebook's rankings shuffle constantly.
+So it errs toward keeping things. It re-checks each old listing about once per
+interval, and drops it as soon as Facebook says sold or unavailable.
 
 ---
 

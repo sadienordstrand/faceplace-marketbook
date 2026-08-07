@@ -41,11 +41,20 @@ from playwright.sync_api import sync_playwright
 HERE = Path(__file__).resolve().parent
 PROFILE_DIR = HERE / ".fb_session"
 LOC_CACHE = HERE / "locations.json"
+# Cities you add yourself. Kept apart from the shipped list, and out of version
+# control, so a personal city never shows up as a change to a tracked file.
+USER_LOC_CACHE = HERE / "my_locations.json"
 OUT_CSV = HERE / "marketplace_results.csv"
 # One cumulative database for every run, so the archive of everything ever seen
 # lives in one place while each run's snapshot goes in its own folder.
 DB_PATH = HERE / "marketplace_results.sqlite"
 DEBUG_DIR = HERE / "debug"
+
+# Where downloaded photos go inside a run folder. Runs made before this was
+# renamed used "thumbs", so both prefixes count as a local image when reading
+# old CSVs and old database rows.
+THUMBS_DIRNAME = "thumbnails"
+LEGACY_THUMBS_DIRNAMES = ("thumbnails/", "thumbs/")
 
 ITEM_RE = re.compile(r"/marketplace/item/(\d+)")
 SEG_RE = re.compile(r"/marketplace/([^/]+)/search", re.I)
@@ -225,19 +234,30 @@ def is_logged_in(page):
         return False
 
 
-def ensure_logged_in(page, timeout_s=600):
-    """Waits (polling, no terminal input needed) until the session is logged in."""
+class SessionExpired(Exception):
+    """Raised instead of waiting when nobody is at the keyboard to log in."""
+
+
+def ensure_logged_in(page, timeout_s=600, unattended=False):
+    """Waits (polling, no terminal input needed) until the session is logged in.
+
+    A scheduled run passes a short timeout and unattended=True: there is no one
+    to type a password at 5am, so it gives up quickly and raises, which the
+    scheduler turns into an email asking you to log in again."""
     page.goto("https://www.facebook.com/", wait_until="domcontentloaded")
     human_pause()
     deadline = time.time() + timeout_s
     warned = False
     while not is_logged_in(page):
-        if not warned:
+        if not warned and not unattended:
             print("\n>> Not logged in. Log in to Facebook BY HAND in the browser "
                   "window (including any two-factor code) — the script continues "
                   "automatically once you're fully in.")
             warned = True
         if time.time() > deadline:
+            if unattended:
+                raise SessionExpired(
+                    "The saved Facebook session is no longer valid.")
             raise SystemExit("Timed out waiting for Facebook login.")
         time.sleep(3)
     if warned:
@@ -372,33 +392,130 @@ def parse_location(text):
     return seg, None
 
 
+# The cities the tool ships with, as a repair net for locations.json. Spaced so a
+# 500-mile radius around each one tiles the continental US, which is why they
+# can't be deleted: removing one puts a hole in that tiling that nothing in the
+# interface would show you afterwards. Leave a city's box unchecked to skip it.
+BUILTIN_LOCATIONS = {
+    "Medford, OR": "108173265878171",
+    "Sacramento, CA": "sac",
+    "Boise, ID": "boise",
+    "Phoenix, AZ": "phoenix",
+    "Albuquerque, NM": "albuquerque",
+    "Bismarck, ND": "105540246145383",
+    "Dallas, TX": "dallas",
+    "Des Moines, IA": "desmoines",
+    "Minneapolis, MN": "minneapolis",
+    "Tallahassee, FL": "107903159238479",
+    "Pittsburgh, PA": "pittsburgh",
+    "Boston, MA": "boston",
+}
+
+
+def read_locations_file(path):
+    """`label -> segment` from one of the two location files, or {} if it isn't
+    there or isn't readable. A missing or mangled file is a reason to fall back,
+    never a reason to stop."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {str(k): str(v) for k, v in data.items() if k and v}
+
+
+def base_locations():
+    """The shipped cities.
+
+    Which cities ship is decided here in code, because that's the coverage
+    guarantee and a file that anything can edit is a poor place to keep it.
+    locations.json is the readable copy of the same list, and it's only ever read:
+    it can correct a segment Facebook has changed, but a name it adds is treated
+    as a city of yours, not a new shipped one, and a name it loses comes back."""
+    from_file = read_locations_file(LOC_CACHE)
+    return {label: from_file.get(label, seg)
+            for label, seg in BUILTIN_LOCATIONS.items()}
+
+
+def is_builtin(label):
+    return label in BUILTIN_LOCATIONS
+
+
+def migrate_own_locations():
+    """Move cities the user added out of locations.json and into their own file.
+
+    Earlier versions appended to locations.json, which meant a personal city
+    showed up as a change to a tracked file. Anything in there that isn't shipped
+    must be one of those, so it moves rather than being dropped on the floor."""
+    strays = {k: v for k, v in read_locations_file(LOC_CACHE).items()
+              if k not in BUILTIN_LOCATIONS}
+    if strays:
+        write_own_locations(strays)
+        print(f"Moved your own cities into {USER_LOC_CACHE.name}: "
+              f"{', '.join(strays)}. They work exactly as before; they're just no "
+              f"longer mixed in with the ones the app ships with.")
+    # locations.json is left alone: it's a tracked file, and rewriting it is the
+    # habit this split exists to break. `git checkout locations.json` tidies it.
+    return strays
+
+
+def load_locations():
+    """Every city available to a search: the shipped ones, then your own."""
+    # Gated on the file existing rather than on it having anything in it. An empty
+    # my_locations.json means "you removed them all", and re-reading the old file
+    # then would hand back the city you just deleted.
+    if not USER_LOC_CACHE.exists():
+        migrate_own_locations()
+    mine = read_locations_file(USER_LOC_CACHE)
+    base = base_locations()
+    return {**base, **{k: v for k, v in mine.items() if k not in base}}
+
+
+def write_own_locations(mapping):
+    USER_LOC_CACHE.write_text(json.dumps(mapping, indent=2), encoding="utf-8")
+
+
 def add_location(label, text):
-    """Append a city to locations.json. Returns (locations, error)."""
+    """Append a city to my_locations.json. Returns (locations, error)."""
     label = (label or "").strip()
     seg, err = parse_location(text)
     if err:
         return None, err
-    locs = json.loads(LOC_CACHE.read_text(encoding="utf-8")) if LOC_CACHE.exists() else {}
+    locs = load_locations()
     label = label or (seg.replace("-", " ").title() if not seg.isdigit() else f"loc-{seg}")
     if label in locs:
         return None, f"You already have a city called '{label}'."
     if seg in locs.values():
         dup = next(k for k, v in locs.items() if v == seg)
         return None, f"That's the same place as '{dup}'."
-    locs[label] = seg
-    LOC_CACHE.write_text(json.dumps(locs, indent=2), encoding="utf-8")
-    return locs, None
+    write_own_locations({**read_locations_file(USER_LOC_CACHE), label: seg})
+    return load_locations(), None
 
 
 def remove_location(label):
-    locs = json.loads(LOC_CACHE.read_text(encoding="utf-8")) if LOC_CACHE.exists() else {}
-    locs.pop(label, None)
-    LOC_CACHE.write_text(json.dumps(locs, indent=2), encoding="utf-8")
-    return locs
+    """Returns (locations, error). Only cities you added yourself can go: the
+    shipped ones are spaced to cover the country, so a mis-click shouldn't be able
+    to quietly shrink the area being searched."""
+    if is_builtin(label):
+        return load_locations(), (
+            f"'{label}' is one of the cities this tool ships with, and they're "
+            f"spaced to cover the country, so it can't be removed. Leave its box "
+            f"unchecked to skip it.")
+    mine = read_locations_file(USER_LOC_CACHE)
+    if label not in mine:
+        return load_locations(), f"There's no city called '{label}'."
+    mine.pop(label)
+    write_own_locations(mine)
+    return load_locations(), None
 
 
 # ---------- import pasted URLs ----------
 def import_urls(path):
+    """Bulk-add your own cities from a text file of pasted Marketplace URLs.
+
+    Replaces my_locations.json, not the shipped list, so this can't cost you a
+    city the coverage depends on."""
     locs = {}
     for raw in Path(path).read_text(encoding="utf-8").splitlines():
         line = raw.strip()
@@ -414,8 +531,14 @@ def import_urls(path):
             continue
         seg = m.group(1)
         locs[label or (seg if not seg.isdigit() else f"loc-{seg}")] = seg
-    LOC_CACHE.write_text(json.dumps(locs, indent=2), encoding="utf-8")
-    print(f"Imported {len(locs)} locations -> {LOC_CACHE}")
+    dupes = [k for k in locs if k in BUILTIN_LOCATIONS]
+    for k in dupes:
+        locs.pop(k)
+    write_own_locations(locs)
+    if dupes:
+        print(f"  [skip] already shipped with the app: {', '.join(dupes)}")
+    print(f"Imported {len(locs)} of your own locations -> {USER_LOC_CACHE.name}. "
+          f"The {len(BUILTIN_LOCATIONS)} that come with the app are untouched.")
 
 
 # ---------- sweep ----------
@@ -433,6 +556,33 @@ def build_search_url(seg, query, exact, min_price=None, max_price=None):
 
 
 RADIUS_RE = re.compile(r'filter_radius_km\\?":\\?"?(\d+)')
+
+
+def city_was_dropped(page, seg):
+    """Whether Facebook ignored the city we asked for.
+
+    A slug it doesn't recognise doesn't 404. It redirects to
+    /marketplace/category/search and answers from whatever location the account
+    is currently set to, so a made-up city returns a full page of real listings
+    filed under the wrong name. Every real city — including the numeric ids —
+    keeps its segment in the URL, which makes the redirect the signal to watch."""
+    try:
+        return seg.lower() not in (page.url or "").lower()
+    except Exception:
+        return False
+
+
+BUY_LOCATION_RE = re.compile(r'"buy_location":\{"display_name":"([^"]{2,60})"')
+
+
+def city_shown(page):
+    """The location Facebook says it searched, for telling the user what they got
+    instead of what they asked for."""
+    try:
+        m = BUY_LOCATION_RE.search(page.content())
+        return m.group(1) if m else ""
+    except Exception:
+        return ""
 
 
 def read_radius_km(page):
@@ -787,6 +937,36 @@ def write_csv(rows, path, fields=FIELDS):
             w.writerow({k: r.get(k, "") for k in fields})
 
 
+# Tables that only scheduled saved searches use. Kept apart from `listings` so
+# the FIELDS list stays exactly the CSV's columns.
+SCHEDULE_SCHEMA = (
+    # Per-listing bookkeeping: what we've already paid to fetch, and whether the
+    # listing is still up. status is 'live', 'sold' or 'gone'.
+    """CREATE TABLE IF NOT EXISTS listing_state (
+         item_id TEXT PRIMARY KEY,
+         first_seen TEXT, last_seen_in_feed TEXT, last_verified TEXT,
+         status TEXT DEFAULT 'live', status_confirmed_at TEXT,
+         verify_failures INTEGER DEFAULT 0, description_fetched_at TEXT)""",
+    """CREATE TABLE IF NOT EXISTS search_runs (
+         run_id INTEGER PRIMARY KEY AUTOINCREMENT,
+         search_id TEXT, started TEXT, finished TEXT, duration_seconds REAL,
+         new_count INTEGER, total_count INTEGER, removed_count INTEGER,
+         status TEXT, error TEXT)""",
+    "CREATE INDEX IF NOT EXISTS ix_search_runs_search ON search_runs(search_id, run_id)",
+    # Which listings made up a given run's results, which is what "the results in
+    # the most recent run" means when deciding what to re-verify.
+    """CREATE TABLE IF NOT EXISTS run_items (
+         run_id INTEGER, item_id TEXT, is_new INTEGER DEFAULT 0,
+         PRIMARY KEY(run_id, item_id))""",
+)
+
+# Columns a sweep row can't be trusted to fill in. A sweep only sees search
+# cards, so its `description` is always blank and its `image` is always a remote
+# URL — letting those overwrite what a detail-page visit already stored would
+# throw away the most expensive work the tool does, every single run.
+KEEP_IF_BLANK = ("description", "raw_text")
+
+
 def open_db(db_path):
     con = sqlite3.connect(db_path)
     con.execute("CREATE TABLE IF NOT EXISTS listings (%s, PRIMARY KEY(item_id))"
@@ -795,17 +975,46 @@ def open_db(db_path):
     for c in FIELDS:
         if c not in existing:
             con.execute(f"ALTER TABLE listings ADD COLUMN {c} TEXT")
+    for stmt in SCHEDULE_SCHEMA:
+        con.execute(stmt)
     con.commit()
     return con
 
 
-def upsert(con, r):
+def _upsert_sql():
     cols = ",".join(FIELDS)
     ph = ",".join(f":{c}" for c in FIELDS)
-    updates = ",".join(f"{c}=excluded.{c}" for c in FIELDS if c != "item_id")
-    con.execute(f"INSERT INTO listings ({cols}) VALUES ({ph}) "
-                f"ON CONFLICT(item_id) DO UPDATE SET {updates}",
-                {c: r.get(c, "") for c in FIELDS})
+    sets = []
+    for c in FIELDS:
+        if c == "item_id":
+            continue
+        if c in KEEP_IF_BLANK:
+            sets.append(f"{c}=CASE WHEN excluded.{c} <> '' "
+                        f"THEN excluded.{c} ELSE listings.{c} END")
+        elif c == "image":
+            # Order matters, and it cost a wrong answer once. A local path beats a
+            # remote URL, because the file is on disk and the URL expires. But a
+            # NEWER local path also has to beat an older one: the old one names a
+            # file in the run folder that wrote it, and a later run reading this
+            # row would point at a photo that isn't there.
+            sets.append("image=CASE "
+                        "WHEN excluded.image <> '' AND excluded.image NOT LIKE 'http%' "
+                        "THEN excluded.image "
+                        "WHEN listings.image <> '' AND listings.image NOT LIKE 'http%' "
+                        "THEN listings.image "
+                        "WHEN excluded.image <> '' THEN excluded.image "
+                        "ELSE listings.image END")
+        else:
+            sets.append(f"{c}=excluded.{c}")
+    return (f"INSERT INTO listings ({cols}) VALUES ({ph}) "
+            f"ON CONFLICT(item_id) DO UPDATE SET {','.join(sets)}")
+
+
+UPSERT_SQL = _upsert_sql()
+
+
+def upsert(con, r):
+    con.execute(UPSERT_SQL, {c: r.get(c, "") for c in FIELDS})
 
 
 # ---------- per-run output folders ----------
@@ -828,36 +1037,85 @@ def make_run_dir(query, base=None):
     return d
 
 
+def reconcile_with_previous(all_rows, prev_by_id, gone_ids, score=None):
+    """Fold the last run's results into this one's.
+
+    A listing that didn't turn up in this sweep is kept, because Facebook's
+    ranking is not a promise: absence from the feed is not evidence the listing
+    is gone. Only the ids in gone_ids, which a check actually confirmed, are
+    dropped. Mutates all_rows and returns (new_ids, carried_count)."""
+    new_ids = [i for i in all_rows if i not in prev_by_id]
+    # A sweep row is a search card, so its description is always blank. Without
+    # this, a listing that keeps appearing in the feed looks undescribed every
+    # run and gets its detail page fetched again forever — which is the exact
+    # cost a scheduled search exists to avoid paying twice.
+    for iid, row in all_rows.items():
+        old = prev_by_id.get(iid)
+        if not old:
+            continue
+        for field in KEEP_IF_BLANK:
+            if not (row.get(field) or "") and (old.get(field) or ""):
+                row[field] = old[field]
+    carried = 0
+    for iid, r in prev_by_id.items():
+        if iid in all_rows or iid in gone_ids:
+            continue
+        if score:
+            r["_score"] = score(r)
+        all_rows[iid] = r
+        carried += 1
+    return new_ids, carried
+
+
+def saved_run_dir(name, base=None):
+    """runs/saved/<name-slug>/ — one stable folder per saved search, rewritten in
+    place every run. A scheduled search that made a new dated folder every hour
+    would bury the results it's meant to surface."""
+    d = (base or (HERE / "runs" / "saved")) / slugify(name)
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 def run(query, scrolls, exact, out_csv=None, only=None, keep_all=False,
-        debug_dump=False, match=None, limit=None, thumbs_dir="thumbs",
+        debug_dump=False, match=None, limit=None, thumbs_dir=THUMBS_DIRNAME,
         do_descriptions=True, do_thumbs=True, do_gallery=True, pace=DEFAULT_PACE,
         exclude=(), min_price=None, max_price=None, descriptions_budget=DEFAULT_DESCRIPTIONS_BUDGET_MIN,
-        assume_yes=False, only_labels=None, open_gallery=True, no_pause=False):
+        assume_yes=False, only_labels=None, open_gallery=True, no_pause=False,
+        run_dir=None, previous_rows=None, describe_new_only=False, verifier=None,
+        login_wait=None, unattended=False):
     """One pass over everything: sweep every saved city, visit each kept
     listing's detail page at most once for its description and full-size photo,
     save that photo locally while its URL is still fresh, then build the
     gallery — all in a single browser session.
 
-    Output goes to its own runs/<query>_<date>/ folder unless out_csv overrides
-    it. The SQLite database stays in the project root as the cumulative index
-    across every run."""
-    if not LOC_CACHE.exists():
-        print("No locations.json. Run --import-urls first.")
-        return
-    locs = json.loads(LOC_CACHE.read_text(encoding="utf-8"))
+    Output goes to its own runs/<query>_<date>/ folder unless out_csv or run_dir
+    overrides it. The SQLite database stays in the project root as the cumulative
+    index across every run.
+
+    A scheduled saved search passes the extra arguments: run_dir to write into
+    the same folder every time, previous_rows for what the last run found,
+    describe_new_only so old listings aren't re-fetched, and verifier to check
+    whether the listings that stopped appearing are actually gone. Returns a
+    summary dict; interactive callers ignore it."""
+    all_locs = load_locations()
+    locs = all_locs
     if only_labels is not None:
         locs = {k: v for k, v in locs.items() if k in set(only_labels)}
     elif only:
         locs = {k: v for k, v in locs.items() if only.lower() in k.lower()}
     if not locs:
-        avail = ", ".join(json.loads(LOC_CACHE.read_text(encoding="utf-8")).keys())
+        avail = ", ".join(all_locs)
         print(f"No matching locations. Available: {avail}")
-        return
+        return {"status": "error", "error": f"No matching locations (have: {avail})"}
     started = time.time()
     started_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
     tokens = query_tokens(query)
     numbers = query_numbers(query)
-    if out_csv:
+    if run_dir:
+        run_dir = Path(run_dir)
+        run_dir.mkdir(parents=True, exist_ok=True)
+        out_path = run_dir / "results.csv"
+    elif out_csv:
         out_path, run_dir = Path(out_csv), None
     else:
         run_dir = make_run_dir(query)
@@ -880,6 +1138,10 @@ def run(query, scrolls, exact, out_csv=None, only=None, keep_all=False,
               f"{max_price if max_price is not None else 'any'}")
     all_rows, dropped_total = {}, 0
     city_stats, drop_reasons, radius_km = {}, {}, None
+    unknown_cities = []
+    prev_by_id = {r["item_id"]: dict(r) for r in (previous_rows or [])
+                  if r.get("item_id")}
+    new_ids, removed, verified_count = [], [], 0
     with keep_awake(), sync_playwright() as p:
         ctx = launch_context(p)
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
@@ -897,7 +1159,7 @@ def run(query, scrolls, exact, out_csv=None, only=None, keep_all=False,
                 graphql_bodies.append(body)
 
         page.on("response", on_response)
-        ensure_logged_in(page)
+        ensure_logged_in(page, timeout_s=login_wait or 600, unattended=unattended)
         first_seg = next(iter(locs.values()))
         radius_km = preflight_pause(
             page, build_search_url(first_seg, query, exact, min_price, max_price),
@@ -909,6 +1171,17 @@ def run(query, scrolls, exact, out_csv=None, only=None, keep_all=False,
             if not goto_with_retry(page, url):
                 continue
             human_pause(3.0, 5.0)
+            if city_was_dropped(page, seg):
+                # Sweeping it anyway would file another city's listings under
+                # this name, which looks like coverage and isn't.
+                instead = city_shown(page)
+                print(f"  Facebook doesn't recognise this city, so it searched "
+                      f"{instead or 'wherever your account is set to'} instead. "
+                      f"Skipping it — remove '{label}' and add it again from a "
+                      f"Marketplace URL.")
+                unknown_cities.append({"label": label, "seg": seg,
+                                       "searched_instead": instead})
+                continue
             try:
                 page.wait_for_selector('a[href*="/marketplace/item/"]', timeout=15000)
             except Exception:
@@ -988,18 +1261,55 @@ def run(query, scrolls, exact, out_csv=None, only=None, keep_all=False,
             print("  dropped because: "
                   + ", ".join(f"{k} ({v})" for k, v in
                               sorted(drop_reasons.items(), key=lambda kv: -kv[1])))
+        if unknown_cities:
+            print("  cities Facebook didn't recognise, so nothing was searched "
+                  "for them: "
+                  + ", ".join(f"{c['label']} ({c['seg']})" for c in unknown_cities))
         if not keep_all:
             print("  (--keep-all keeps filtered listings, flagged in the "
                   "source_section / matches_query columns, instead of dropping them.)")
+
+        # ---- saved-search bookkeeping ----
+        # A listing in this run's feed is proven alive for free. One that has
+        # stopped appearing might be gone, or the ranking might simply not have
+        # surfaced it this time, so it is only dropped once a check confirms it.
+        feed_ids = set(all_rows)
+        new_ids = [i for i in all_rows if i not in prev_by_id]
+        if prev_by_id:
+            print(f"\n{len(new_ids)} of these are new since the last run.")
+            missing = [prev_by_id[i] for i in prev_by_id if i not in feed_ids]
+            if missing and verifier:
+                print(f"Checking {len(missing)} listing"
+                      f"{'' if len(missing) == 1 else 's'} that didn't turn up "
+                      f"this time...")
+                removed, verified_count, auth_failed = verifier(ctx, missing)
+                if auth_failed:
+                    raise SessionExpired(
+                        "The Facebook session expired while checking listings.")
+                print(f"  {len(removed)} confirmed sold or taken down, "
+                      f"{verified_count - len(removed)} still up.")
+            new_ids, carried = reconcile_with_previous(
+                all_rows, prev_by_id, {r["item_id"] for r in removed},
+                score=lambda r: relevance(r, tokens, numbers))
+            if carried:
+                print(f"  {carried} kept from previous runs (not in this feed, "
+                      f"but not confirmed gone either).")
+            rows = list(all_rows.values())
 
         thumbs_path = Path(thumbs_dir)
         if not thumbs_path.is_absolute():
             thumbs_path = out_path.resolve().parent / thumbs_path
 
-        described, interrupted = 0, False
+        described, interrupted, described_ids = 0, False, []
         if do_descriptions and rows:
             targets = [r for r in rows
                        if not match or match.lower() in (r.get("title", "").lower())]
+            if describe_new_only:
+                # The whole point of the schedule: a detail page costs about
+                # seven seconds, so only visit listings we've never described.
+                fresh = set(new_ids)
+                targets = [r for r in targets
+                           if r["item_id"] in fresh or not (r.get("description") or "")]
             # Best matches first, so a capped or interrupted run still spends
             # its time on the listings most likely to be what you searched for.
             targets.sort(key=lambda r: (-r["_score"], r.get("title", "")))
@@ -1018,6 +1328,7 @@ def run(query, scrolls, exact, out_csv=None, only=None, keep_all=False,
                                        thumbs_path if do_thumbs else None,
                                        debug_dump, pace, on_row=save_row)
                 described = sum(1 for r in targets if r.get("description"))
+                described_ids = [r["item_id"] for r in targets if r.get("description")]
                 # An interrupt means stop working, not throw away the run: skip
                 # the remaining downloads and go straight to the CSV + gallery.
                 interrupted = not finished
@@ -1066,6 +1377,7 @@ def run(query, scrolls, exact, out_csv=None, only=None, keep_all=False,
             "search_radius_note": describe_radius(radius_km),
             "locations": locs,
             "per_city": city_stats,
+            "unknown_cities": unknown_cities,
             "scrolling": {
                 "ceiling_per_city": scrolls,
                 "keeper_patience": KEEPER_PATIENCE,
@@ -1083,9 +1395,19 @@ def run(query, scrolls, exact, out_csv=None, only=None, keep_all=False,
             "images_local": sum(1 for r in rows
                                 if (r.get("image") or "").startswith(f"{thumbs_path.name}/")),
             "files": {"csv": out_path.name, "gallery": gallery,
-                      "thumbs": thumbs_path.name,
+                      "thumbnails": thumbs_path.name,
                       "database": str(DB_PATH)},
         }
+        if prev_by_id:
+            manifest["saved_search"] = {
+                "new_listings": len(new_ids),
+                "carried_from_previous_runs": len(rows) - len(feed_ids),
+                "listings_verified": verified_count,
+                "removed": [{"item_id": r.get("item_id"), "title": r.get("title"),
+                             "price": r.get("price"), "url": r.get("url"),
+                             "removal": r.get("removal"), "marker": r.get("marker")}
+                            for r in removed],
+            }
         (run_dir / "run.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
         print(f"Run folder: {run_dir}")
     print(f"\nFinished in {fmt_dur(elapsed)}.")
@@ -1097,6 +1419,28 @@ def run(query, scrolls, exact, out_csv=None, only=None, keep_all=False,
             webbrowser.open(gallery_path.resolve().as_uri())
         except Exception as e:
             print(f"  couldn't open a browser ({e}); open the file yourself.")
+    return {
+        "status": "ok",
+        "query": query,
+        "run_dir": str(run_dir) if run_dir else None,
+        "csv": str(out_path),
+        "gallery": str(gallery_path) if gallery_path else None,
+        "started": started_iso,
+        "finished": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "duration_seconds": round(elapsed, 1),
+        "new_ids": new_ids,
+        "total_ids": [r["item_id"] for r in rows],
+        "new_rows": [r for r in rows if r["item_id"] in set(new_ids)],
+        "removed": removed,
+        "listings_verified": verified_count,
+        "described_ids": described_ids,
+        "descriptions_fetched": described,
+        "interrupted": interrupted,
+        "radius_km": radius_km,
+        "per_city": city_stats,
+        "locations": locs,
+        "unknown_cities": unknown_cities,
+    }
 
 
 # ---------- description retrieval (detail pages) ----------
@@ -1404,13 +1748,30 @@ def download_thumbs(csv_in, outdir):
     print(f"Wrote {out}. Finished in {fmt_dur(time.time() - started)}.")
 
 
+def login_only():
+    """Refresh the saved Facebook session and nothing else.
+
+    The session lives in this app's own browser profile, so logging in with Safari
+    or Chrome does nothing for it. Without this, the only way to renew it was to
+    start a sweep and then abandon it — which risks killing the browser before it
+    has written the new session to disk."""
+    print("Opening Facebook. If you're already logged in, this finishes by itself.")
+    with sync_playwright() as p:
+        ctx = launch_context(p)
+        page = ctx.pages[0] if ctx.pages else ctx.new_page()
+        ensure_logged_in(page)
+        # Closing the context is what writes the session to .fb_session.
+        ctx.close()
+    print("\nLogged in, and the session is saved. Searches — including scheduled "
+          "ones — will use it until Facebook expires it, usually a few weeks.")
+
+
 def set_radius():
     """The Marketplace search radius is an account setting, not a URL parameter,
     so this opens the UI and waits for you to change it — then confirms the new
     value from the page's own filter payload. Normally you want this pinned at
     the 500-mile maximum, which is what the saved city spacing is built around."""
-    seg = next(iter(json.loads(LOC_CACHE.read_text(encoding="utf-8")).values())) \
-        if LOC_CACHE.exists() else "108173265878171"
+    seg = next(iter(load_locations().values()))
     with sync_playwright() as p:
         ctx = launch_context(p)
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
@@ -1441,36 +1802,50 @@ def run_from_ui(a):
     """Collect settings from the pre-flight window, then run with them.
     Command-line values seed the form, so --query x --ui opens it pre-filled."""
     import settings_ui
-    if not LOC_CACHE.exists():
-        print("No locations.json. Run --import-urls first.")
-        return
-    locs = json.loads(LOC_CACHE.read_text(encoding="utf-8"))
+    import scheduling
+    locs = load_locations()
 
     def ui_add_city(label, text):
         updated, err = add_location(label, text)
-        return (list(updated.keys()) if updated else []), err
+        return (list(updated.keys()) if updated else list(locs)), err
+
+    def ui_remove_city(label):
+        updated, err = remove_location(label)
+        return list(updated.keys()), err
 
     cfg = settings_ui.collect_settings(
         list(locs.keys()), PACES,
         {"query": a.query or "", "exclude": a.exclude or "", "pace": a.pace,
          "page_work": PAGE_WORK_SECONDS, "photo_save": PHOTO_SAVE_SECONDS,
          "descriptions_budget": a.descriptions_budget},
-        on_add=ui_add_city,
-        on_remove=lambda label: list(remove_location(label).keys()))
+        on_add=ui_add_city, on_remove=ui_remove_city,
+        builtins=list(base_locations()),
+        hooks=scheduling.ui_hooks())
     if not cfg:
         print("Cancelled — nothing was run.")
         return
+    # "Run now" on a saved search has to wait for this window to close, because
+    # the window is holding the one Chromium profile the session lives in.
+    if cfg.get("action") == "run_saved":
+        scheduling.tick(force=cfg["id"])
+        return
     print(f"\nStarting: query '{cfg['query']}', {len(cfg['cities'])} "
           f"cit{'y' if len(cfg['cities']) == 1 else 'ies'}.")
-    run(cfg["query"], DEFAULT_SCROLLS, cfg["exact"], a.out, None, a.keep_all,
-        cfg["debug_dump"], a.match, cfg["limit"], a.thumbs_dir,
-        do_descriptions=cfg["do_descriptions"], do_thumbs=cfg["do_thumbs"],
-        do_gallery=cfg["do_gallery"], pace=cfg["pace"],
-        exclude=[t.strip() for t in cfg["exclude"].split(",") if t.strip()],
-        min_price=cfg["min_price"], max_price=cfg["max_price"],
-        descriptions_budget=cfg["descriptions_budget"], assume_yes=a.yes,
-        only_labels=cfg["cities"], open_gallery=not a.no_open,
-        no_pause=a.no_pause)
+    try:
+        with scheduling.run_lock("a manual run"):
+            run(cfg["query"], DEFAULT_SCROLLS, cfg["exact"], a.out, None,
+                a.keep_all, cfg["debug_dump"], a.match, cfg["limit"],
+                a.thumbs_dir,
+                do_descriptions=cfg["do_descriptions"], do_thumbs=cfg["do_thumbs"],
+                do_gallery=cfg["do_gallery"], pace=cfg["pace"],
+                exclude=[t.strip() for t in cfg["exclude"].split(",") if t.strip()],
+                min_price=cfg["min_price"], max_price=cfg["max_price"],
+                descriptions_budget=cfg["descriptions_budget"], assume_yes=a.yes,
+                only_labels=cfg["cities"], open_gallery=not a.no_open,
+                no_pause=a.no_pause)
+    except scheduling.AlreadyRunning as e:
+        print(f"\nNot starting: {e}.\nBoth runs would need the same Facebook "
+              f"session, so wait for that one to finish.")
 
 
 def main():
@@ -1511,6 +1886,8 @@ def main():
                     help="don't open the finished gallery in a browser")
     ap.add_argument("--set-radius", action="store_true",
                     help="open Marketplace so you can check/change the account search radius")
+    ap.add_argument("--login", action="store_true",
+                    help="log into Facebook and save the session, without running a search")
     ap.add_argument("--ui", action="store_true",
                     help="open the settings window (the default when run with no arguments)")
     ap.add_argument("--no-ui", action="store_true",
@@ -1519,7 +1896,10 @@ def main():
     ap.add_argument("--match", metavar="TERM", help="only describe listings whose title contains TERM")
     ap.add_argument("--limit", type=int, metavar="N",
                     help="only retrieve descriptions for the first N listings")
-    ap.add_argument("--thumbs-dir", default="thumbs", help="thumbnail folder (default: thumbs)")
+    # --thumbs-dir is the old name, kept so existing command lines don't break.
+    ap.add_argument("--thumbnails-dir", "--thumbs-dir", default=THUMBS_DIRNAME,
+                    dest="thumbs_dir", metavar="DIR",
+                    help=f"thumbnail folder (default: {THUMBS_DIRNAME})")
     ap.add_argument("--pace", choices=list(PACES), default=DEFAULT_PACE,
                     help="pause between detail-page hits while retrieving "
                          "descriptions: "
@@ -1548,6 +1928,8 @@ def main():
     exclude = [t.strip() for t in a.exclude.split(",") if t.strip()]
     if a.import_urls:
         import_urls(a.import_urls)
+    elif a.login:
+        login_only()
     elif a.set_radius:
         set_radius()
     elif a.descriptions:
