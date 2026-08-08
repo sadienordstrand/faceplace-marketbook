@@ -132,15 +132,19 @@ def retrieve_descriptions(ctx, page, targets, thumbs_path=None, debug_dump=False
           "(--limit / --match narrow it; --pace changes the throttle.)")
     if debug_dump:
         DEBUG_DIR.mkdir(exist_ok=True)
-    # Park the page somewhere inert before touching routing. We arrive here
-    # sitting on the last city's search feed, which has been scrolled dozens of
-    # times and is still streaming images and GraphQL for thousands of cards.
-    # Turning on interception makes every one of those in-flight requests
-    # round-trip to Python, and on Windows — where the driver connection is
-    # slower — that backlog is enough to wedge the route call itself before the
-    # first listing is ever fetched. about:blank drops the whole feed first.
+    # Do this stage on a page of our own. We arrive here sitting on the last
+    # city's search feed: a tab that has been scrolled dozens of times, still
+    # holds thousands of cards, and — being facebook.com — is attached to
+    # Facebook's service worker. Turning on interception there makes every
+    # in-flight request round-trip to Python, and page.route() has no timeout,
+    # so a busy enough renderer wedges the run outright with no way back.
+    # Navigating that tab to about:blank isn't enough, because the renderer and
+    # its service worker survive the navigation; a new tab has neither. Opened
+    # before the old one closes, since a persistent context with no pages left
+    # shuts the browser down.
+    feed_page, page = page, ctx.new_page()
     try:
-        page.goto("about:blank", wait_until="domcontentloaded")
+        feed_page.close()
     except Exception:
         pass
 
@@ -160,10 +164,18 @@ def retrieve_descriptions(ctx, page, targets, thumbs_path=None, debug_dump=False
         except Exception:
             pass
 
-    page.route("**/*", block_heavy_requests)
     got, saved, spent = 0, 0, []
-    interrupted = False
+    interrupted, routed = False, False
     try:
+        # Skipping those requests only buys speed, so a failure to arrange it
+        # isn't worth losing the stage over. Registered inside the try so a
+        # Ctrl-C while it's being set up ends the run the same way one during
+        # the loop does — with the CSV and gallery still written.
+        try:
+            page.route("**/*", block_heavy_requests)
+            routed = True
+        except Exception as e:
+            print(f"  (couldn't skip images on detail pages: {e})")
         for i, r in enumerate(targets, 1):
             url = r.get("url") or f"https://www.facebook.com/marketplace/item/{r.get('item_id', '')}"
             print(f"  [{i}/{len(targets)}] {url}")
@@ -217,10 +229,11 @@ def retrieve_descriptions(ctx, page, targets, thumbs_path=None, debug_dump=False
         # may already be gone and this raises. That exception would replace the
         # clean return above and take the whole run with it — losing the CSV and
         # gallery for work that was already done and saved.
-        try:
-            page.unroute("**/*")
-        except Exception:
-            pass
+        if routed:
+            try:
+                page.unroute("**/*")
+            except Exception:
+                pass
     avg = sum(spent) / len(spent) if spent else 0
     print(f"  {got}/{len(spent) if interrupted else len(targets)} descriptions"
           + (f", {saved} photos saved" if thumbs_path else "")
