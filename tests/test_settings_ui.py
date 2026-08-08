@@ -17,7 +17,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 import scheduling as sc
 import settings_ui
@@ -30,6 +30,10 @@ except ImportError:
 
 CITIES = ["Medford, OR", "Sacramento, CA", "Denver, CO"]
 PACES = {"fast": (1.0, 2.5), "slow": (3.0, 5.0)}
+OFFER = {"ask": True, "why": "Want something quicker to reach?",
+         "places": [{"id": "desktop", "label": "Desktop", "on": True},
+                    {"id": "dock", "label": "Dock", "on": False}],
+         "note": "The Dock will blink as it restarts."}
 
 
 @unittest.skipUnless(HAVE_PLAYWRIGHT, "needs Playwright")
@@ -42,13 +46,13 @@ class UITest(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         root = Path(self.tmp.name)
         self._saved = {k: getattr(sc, k) for k in
-                       ("SEARCHES_PATH", "EMAIL_CONFIG_PATH", "STATE_DIR",
+                       ("SEARCHES_PATH", "EMAIL_CONFIG_PATH", "SCHEDULE_DIR",
                         "LOCK_PATH", "TICK_LOG")}
         sc.SEARCHES_PATH = root / "saved_searches.json"
         sc.EMAIL_CONFIG_PATH = root / "email_config.json"
-        sc.STATE_DIR = root / ".schedule"
-        sc.LOCK_PATH = sc.STATE_DIR / "run.lock"
-        sc.TICK_LOG = sc.STATE_DIR / "tick.log"
+        sc.SCHEDULE_DIR = root / ".schedule"
+        sc.LOCK_PATH = sc.SCHEDULE_DIR / "run.lock"
+        sc.TICK_LOG = sc.SCHEDULE_DIR / "tick.log"
         # Never let a test reach launchd or Task Scheduler.
         self._installed = sc.schedule_installed
         sc.schedule_installed = lambda: False
@@ -66,7 +70,8 @@ class UITest(unittest.TestCase):
         for k, v in self._saved.items():
             setattr(sc, k, v)
 
-    def drive(self, script, defaults=None, cities=None, builtins=()):
+    def drive(self, script, defaults=None, cities=None, builtins=(),
+              extra_hooks=None):
         """Opens the window, runs `script(page)`, returns what was submitted."""
         result = {}
         cities = list(cities or CITIES)
@@ -92,7 +97,7 @@ class UITest(unittest.TestCase):
             defaults or {"query": "", "exclude": "", "pace": "fast",
                          "page_work": 3.5, "photo_save": 1.5,
                          "descriptions_budget": 0},
-            headless=True, hooks=sc.ui_hooks(),
+            headless=True, hooks={**sc.ui_hooks(), **(extra_hooks or {})},
             on_add=lambda label, text: (cities, None),
             on_remove=remove, builtins=builtins,
             on_ready=ready)
@@ -477,6 +482,176 @@ class UITest(unittest.TestCase):
             self.drive(script)
         finally:
             sc.searches_for_ui = real
+
+    # ------------------------------------------------ the shortcut offer
+    def shortcut_hooks(self, offer=None, result=None, reopen=None):
+        """Stands in for make_desktop_icon, which would otherwise put a real
+        icon on the desktop of whoever ran the tests."""
+        self.asked = []
+        return {
+            "shortcut_offer": lambda: offer if offer is not None else OFFER,
+            "shortcut_reopen": lambda: (
+                self.asked.append(("reopen",))
+                or (reopen if reopen is not None else OFFER)),
+            "add_shortcut": lambda ids, never: (
+                self.asked.append(("add", ids, never))
+                or (result or {"added": ids, "ok": True,
+                               "message": "Done. Your icon is on your desktop."})),
+            "shortcut_never": lambda: self.asked.append(("never",)) or {"ok": True},
+        }
+
+    def test_no_offer_means_no_panel(self):
+        def script(page):
+            self.assertTrue(page.is_hidden("#shortcutAsk"))
+        self.drive(script, extra_hooks=self.shortcut_hooks(offer={"ask": False}))
+
+    def test_the_button_opens_the_sheet_when_the_launch_offer_stayed_quiet(self):
+        # Replaces the Add to Desktop launchers: dismissing the offer, or already
+        # having an icon, must not be the end of ever getting one.
+        def script(page):
+            self.assertTrue(page.is_hidden("#shortcutAsk"))
+            page.click("#tabEmail")
+            page.click("#shortcutOpen")
+            page.wait_for_selector("#shortcutAsk:visible")
+            self.assertEqual(
+                page.eval_on_selector_all("#shortcutPlaces .tog",
+                                          "els => els.map(e => e.dataset.place)"),
+                ["desktop", "dock"])
+        self.drive(script, extra_hooks=self.shortcut_hooks(offer={"ask": False}))
+        self.assertEqual(self.asked, [("reopen",)])
+
+    def test_a_machine_with_nowhere_to_put_one_says_so_rather_than_opening(self):
+        def script(page):
+            page.click("#tabEmail")
+            page.click("#shortcutOpen")
+            page.wait_for_selector("#shortcutOpenMsg:not([hidden])")
+            self.assertIn("hasn't anywhere", page.text_content("#shortcutOpenMsg"))
+            self.assertTrue(page.is_hidden("#shortcutAsk"))
+        self.drive(script, extra_hooks=self.shortcut_hooks(
+            offer={"ask": False}, reopen={"ask": False}))
+
+    def test_reopening_after_an_add_starts_the_sheet_over(self):
+        # A sheet that's been through an add has its places and buttons put away.
+        def script(page):
+            page.wait_for_selector("#shortcutAsk:visible")
+            page.click("#shortcutAdd")
+            page.wait_for_selector("#shortcutMsg:not([hidden])")
+            page.click("#shortcutSkip")
+            page.wait_for_selector("#shortcutAsk", state="hidden")
+            page.click("#tabEmail")
+            page.click("#shortcutOpen")
+            page.wait_for_selector("#shortcutAsk:visible")
+            for back in ("#shortcutPlaces", "#shortcutNever", "#shortcutAdd"):
+                self.assertFalse(page.is_hidden(back), back)
+            self.assertTrue(page.is_hidden("#shortcutMsg"))
+            self.assertEqual(page.text_content("#shortcutAdd").strip(),
+                             "Add shortcut")
+            self.assertEqual(page.text_content("#shortcutSkip").strip(), "Not now")
+            self.assertEqual(
+                page.get_attribute("#shortcutNever", "aria-pressed"), "false")
+        self.drive(script, extra_hooks=self.shortcut_hooks())
+
+    def test_closing_the_sheet_hands_focus_back_to_the_button_that_opened_it(self):
+        def script(page):
+            page.click("#tabEmail")
+            page.click("#shortcutOpen")
+            page.wait_for_selector("#shortcutAsk:visible")
+            page.click("#shortcutSkip")
+            page.wait_for_selector("#shortcutAsk", state="hidden")
+            self.assertEqual(page.evaluate("document.activeElement.id"),
+                             "shortcutOpen")
+        self.drive(script, extra_hooks=self.shortcut_hooks(offer={"ask": False}))
+
+    def test_the_panel_shows_the_places_python_offered(self):
+        # Only the first is ticked: a Dock or Start menu entry is more intrusive
+        # than a desktop icon, so it's opt-in.
+        def script(page):
+            page.wait_for_selector("#shortcutAsk:visible")
+            self.assertEqual(
+                page.eval_on_selector_all(
+                    "#shortcutPlaces .tog",
+                    "els => els.map(e => [e.dataset.place,"
+                    " e.getAttribute('aria-pressed')])"),
+                [["desktop", "true"], ["dock", "false"]])
+            self.assertEqual(page.evaluate("document.activeElement.id"),
+                             "shortcutAdd")
+        self.drive(script, extra_hooks=self.shortcut_hooks())
+
+    def test_adding_sends_every_ticked_place_and_then_only_offers_to_close(self):
+        def script(page):
+            page.wait_for_selector("#shortcutAsk:visible")
+            page.click("#shortcutPlaces .tog[data-place=dock]")
+            page.click("#shortcutAdd")
+            page.wait_for_selector("#shortcutMsg:not([hidden])")
+            self.assertIn("Done", page.text_content("#shortcutMsg"))
+            for gone in ("#shortcutPlaces", "#shortcutNever", "#shortcutAdd"):
+                self.assertTrue(page.is_hidden(gone), gone)
+            self.assertEqual(page.text_content("#shortcutSkip").strip(), "Close")
+            page.click("#shortcutSkip")
+            page.wait_for_selector("#shortcutAsk", state="hidden")
+        self.drive(script, extra_hooks=self.shortcut_hooks())
+        self.assertEqual(self.asked, [("add", ["desktop", "dock"], False)])
+
+    def test_a_refusal_leaves_the_panel_usable_and_says_why(self):
+        hooks = self.shortcut_hooks(
+            result={"error": "Windows wouldn't create the shortcut."})
+
+        def script(page):
+            page.wait_for_selector("#shortcutAsk:visible")
+            page.click("#shortcutAdd")
+            page.wait_for_selector("#shortcutMsg:not([hidden])")
+            self.assertIn("wouldn't", page.text_content("#shortcutMsg"))
+            self.assertFalse(page.is_hidden("#shortcutAdd"))
+            self.assertFalse(page.is_disabled("#shortcutAdd"))
+            self.assertEqual(page.text_content("#shortcutAdd").strip(),
+                             "Add shortcut")
+        self.drive(script, extra_hooks=hooks)
+
+    def test_a_partial_success_is_not_dressed_up_as_a_whole_one(self):
+        hooks = self.shortcut_hooks(
+            result={"added": ["desktop"], "ok": False,
+                    "message": "Done, on your desktop. The Dock said no."})
+
+        def script(page):
+            page.wait_for_selector("#shortcutAsk:visible")
+            page.click("#shortcutAdd")
+            page.wait_for_selector("#shortcutMsg:not([hidden])")
+            self.assertNotIn("ok", page.get_attribute("#shortcutMsg", "class"))
+        self.drive(script, extra_hooks=hooks)
+
+    def test_not_now_only_records_it_when_the_box_is_ticked(self):
+        def dismiss(page):
+            page.wait_for_selector("#shortcutAsk:visible")
+            page.click("#shortcutSkip")
+            page.wait_for_selector("#shortcutAsk", state="hidden")
+        self.drive(dismiss, extra_hooks=self.shortcut_hooks())
+        self.assertEqual(self.asked, [])
+
+        def dismiss_for_good(page):
+            page.wait_for_selector("#shortcutAsk:visible")
+            page.click("#shortcutNever")
+            page.click("#shortcutSkip")
+            page.wait_for_selector("#shortcutAsk", state="hidden")
+        self.drive(dismiss_for_good, extra_hooks=self.shortcut_hooks())
+        self.assertEqual(self.asked, [("never",)])
+
+    def test_escape_closes_the_panel_without_abandoning_the_window(self):
+        def script(page):
+            page.wait_for_selector("#shortcutAsk:visible")
+            page.keyboard.press("Escape")
+            page.wait_for_selector("#shortcutAsk", state="hidden")
+            page.fill("#query", "defender 110")
+            page.click("#start")
+        data = self.drive(script, extra_hooks=self.shortcut_hooks())
+        self.assertEqual((data or {}).get("query"), "defender 110")
+
+    def test_clicking_beside_the_panel_closes_it(self):
+        def script(page):
+            page.wait_for_selector("#shortcutAsk:visible")
+            box = page.query_selector("#shortcutAsk").bounding_box()
+            page.mouse.click(box["x"] + 6, box["y"] + 6)
+            page.wait_for_selector("#shortcutAsk", state="hidden")
+        self.drive(script, extra_hooks=self.shortcut_hooks())
 
     def test_the_form_still_works_with_no_hooks_at_all(self):
         # settings_ui must not depend on scheduling.py being importable.

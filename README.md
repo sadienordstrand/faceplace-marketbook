@@ -14,9 +14,40 @@ on a schedule, and have it email you what's new — and what sold — since last
 
 Works on Windows and Mac.
 
+## Contents
+
+- [**Results**](#results) — what a finished search looks like
+- [**Please read this first**](#please-read-this-first) — this tool uses your real
+  Facebook account
+- [**Setting it up**](#setting-it-up) — about ten minutes, once
+  - [Step 1 — Get the folder onto your computer](#step-1--get-the-folder-onto-your-computer)
+  - [Step 2 — Start it](#step-2--start-it)
+  - [Step 3 — Log into Facebook](#step-3--log-into-facebook)
+  - [Step 4 — Set your search radius](#step-4--set-your-search-radius)
+  - [Step 5 — Put it on your desktop, if you like](#step-5--put-it-on-your-desktop-if-you-like)
+- [**Running a search**](#running-a-search) — the settings window, and how to get
+  cleaner results
+  - [Getting better results](#getting-better-results)
+  - [Adding your own cities](#adding-your-own-cities)
+- [**While it runs**](#while-it-runs) — what to expect, and what not to touch
+- [**Your results**](#your-results) — the gallery and the files beside it
+- [**Automated searches**](#automated-searches) — run on a schedule and get
+  emailed what's new
+  - [On a Mac, check where this folder lives first](#on-a-mac-check-where-this-folder-lives-first)
+  - [Part 1 — Give the app an email password](#part-1--give-the-app-an-email-password)
+  - [Part 2 — Save a search](#part-2--save-a-search)
+  - [Part 3 — Let your computer wake itself up](#part-3--let-your-computer-wake-itself-up)
+  - [What the emails look like](#what-the-emails-look-like)
+  - [Where scheduled results live](#where-scheduled-results-live)
+  - [Turning it off](#turning-it-off)
+- [**When something goes wrong**](#when-something-goes-wrong) — the usual
+  problems, and what to do
+- [**For the technically inclined**](#for-the-technically-inclined) — how it
+  works inside
+
 ---
 
-## What you get
+## Results
 
 Every run builds a gallery like this one, saved on your own computer. You can
 search it, sort it by price or year, filter by city, and throw out anything you
@@ -30,7 +61,7 @@ Facebook.
 
 <img src="docs/images/gallery-card.jpg" alt="A single listing card" width="300">
 
-Searches are set up in a window like this — no typing commands. Every setting has
+Searches are set up in a window like this. Every setting has
 an explanation underneath it.
 
 ![The search setup window](docs/images/settings-search.png)
@@ -62,8 +93,8 @@ that — deliberately. The practical consequences:
 - **You log in by hand.** A browser window opens and you type your own password
   and two-factor code into Facebook, exactly as you normally would. Your
   password is never seen or stored by this app. Only the resulting browser
-  session is saved on your computer, in a hidden folder called `.fb_session`, so
-  you don't have to log in every time.
+  session is saved on your computer, in a hidden folder called `.state`, so you
+  don't have to log in every time.
 - **Facebook changes their website constantly.** When they do, searches may
   start coming back empty or with missing prices. That's expected wear, not
   something you broke.
@@ -192,6 +223,35 @@ In the browser window, click the location control in the left sidebar and
 set the distance to **500 miles**. While you're in there, dismiss any Facebook
 notification popups. Then come back to the terminal and press **Enter**.
 
+### Step 5 — Put it on your desktop, if you like
+
+The Search Setup window offers this by itself the first time it opens, with a
+small panel headed **Add a shortcut?** Tick where you want it and click **Add
+shortcut**:
+
+- **Desktop** — an icon called **Faceplace Marketbook** that you double-click to
+  start a search, exactly as the Start file does.
+- **Dock** (Mac) — keeps it in the Dock permanently. It also puts the app in your
+  own Applications folder, which is what the Dock points at, and the Dock blinks
+  as it restarts.
+- **Start menu** (Windows) — nothing on screen, but typing "Faceplace" finds it.
+
+If you'd rather not, click **Not now** and it'll ask again next time. Tick
+**Don't ask again** first and it won't. Either way it stops asking once you have
+a shortcut, and it never asks on a computer that already has one.
+
+You can also do it whenever you like, without waiting to be asked. In the Search
+Setup window, open the **Email & schedule** tab and click **Add a shortcut…**.
+That works even if you ticked **Don't ask again**, and even if you already have
+one somewhere and want a second.
+
+A shortcut is the only thing any of this puts outside the app's folder. Dragging
+it to the Trash (or deleting it, on Windows) removes it and nothing else.
+
+If you move the app's folder later, the icon will still be pointing at where the
+folder used to be. Click **Add a shortcut…** again from its new home and you'll
+get one that works.
+
 ---
 
 ## Running a search
@@ -264,10 +324,10 @@ and removing one leaves a hole nothing would show you afterwards. To leave one
 out of a search, untick it — that has exactly the effect you want and it's not
 permanent.
 
-Your cities are kept in their own file, `my_locations.json`, separate from the
-twelve in `locations.json`. Nothing you do in the window ever changes that second
-file, so an update to the app can't lose your cities and adding one can't damage
-the built-in list.
+Your cities are kept in their own file, `.state/my_locations.json`, separate from
+the twelve in `src/locations.json`. Nothing you do in the window ever changes
+that second file, so an update to the app can't lose your cities and adding one
+can't damage the built-in list.
 
 **If the address you paste isn't really a city, you won't find out until a run.**
 The app checks that the link has a city in it, but it can't tell a real city from
@@ -401,9 +461,8 @@ If it doesn't arrive, the app will tell you why in the box under the buttons.
 
 **One thing to know about sending mail to yourself:** Gmail sometimes files a
 message you sent yourself under **Sent Mail** and never puts it in your inbox.
-The test above checks for this, and if it happens, the app switches to placing
-reports in your inbox directly. You don't have to do anything — just run the
-test.
+If the test message isn't in your inbox, look there before assuming it failed.
+Having reports sent to a different address avoids this entirely.
 
 #### If the address or password is wrong
 
@@ -488,70 +547,38 @@ part gives it permission to wake up, do the run, and go back to sleep.
    administrator rights.
 4. Read the message that appears. It tells you if anything is left to do by hand.
 
-Then there are a few system settings you might want to change. **You don't have to
-change any of them.** Automatic runs work without them — the difference is how
-reliably a run happens when you're not around. Each one below says what it buys
-you, so you can decide which trade-offs you care about.
-
-The one thing to understand: the app asks macOS to wake the computer a couple of
-minutes before each run. A Mac that's awake, or asleep in the ordinary way, will
-take that appointment. What defeats it is the machine being switched off, or in
-the deepest kind of sleep, or in a mode that suppresses background work.
+Then there are a few system settings you might want to change.
 
 #### On a Mac
 
 Open **System Settings**, click **Battery**, then **Options…** at the bottom.
 
-- **Wake for network access → Always.** Worth doing. This is what lets a sleeping
-  Mac come back for its appointment. On *Only on Power Adapter* — the usual
+- **Wake for network access → Always.** This is what lets a sleeping
+  Mac wake up for its scheduled run. On *Only on Power Adapter* — the usual
   default — a scheduled run on battery is skipped and happens the next time the
   machine is awake instead, and the report tells you it ran late. Nothing is
   lost either way.
-- **Prevent automatic sleeping on power adapter when the display is off.** Optional,
-  and you asked the right question if you're wondering why it's here: sleeping
-  *is* fine, because the Mac gets woken back up. Turning this on just removes the
-  wake-up from the equation entirely, which is the difference between a run that
-  starts within a minute of its time and one that starts within a few. If you'd
-  rather your Mac sleep normally, leave it alone.
-- **Low Power Mode → Never**, or **Only on Battery** if you want it while
-  unplugged. This one matters more than it looks: Low Power Mode holds back
-  background work, so a run scheduled during it can be delayed or skipped
-  outright.
+- **Low Power Mode → Never**, or **Only on Battery** if you want it to work while
+  unplugged. Keep in mind that automated searches will use up some battery life.
 
 **Closing the lid.** With the lid shut and no display attached, a Mac laptop goes
-into a much deeper sleep, and scheduled wake-ups stop being dependable. If you
-want overnight runs, leave the lid open and let the screen turn itself off — the
-screen going dark changes nothing.
+into a deeper sleep, and scheduled wake-ups stop being dependable. If you
+want overnight runs, leave the lid open and let the screen turn itself off.
 
 **With external monitors, a shut lid is fine.** A Mac driving an external display
-stays in the ordinary kind of sleep, so it wakes for a run normally. That's the
-setup to use if you don't want to leave a laptop open.
-
-**A Mac that's been shut down won't run anything.** Macs don't shut down on their
-own, so this only happens if you choose Shut Down yourself. If you do, and you
-have FileVault on (most people do), the Mac can't finish starting up without
-someone typing the password, so scheduled runs stay stopped until you unlock it.
+stays in the ordinary kind of sleep, so it wakes for a run normally.
 
 #### On Windows
 
-**Allow wake timers is the one that actually matters.** On battery, Windows blocks
-wake timers by default, and a blocked wake timer means a sleeping laptop simply
-doesn't wake up for a run. If you only change one thing, change this one.
-
-Press the Windows key, type **Control Panel**, and open it. Then go **Hardware and
-Sound → Power Options → Change plan settings → Change advanced power settings**.
+**Allow wake timers** Press the Windows key, type **Control Panel**, and open it. Then go to 
+**Hardware and Sound → Power Options → Change plan settings → Change advanced power settings**.
 In the list that appears, expand **Sleep**, then **Allow wake timers**, set
 **both** *On battery* and *Plugged in* to **Enable**, and click **OK**.
 
 The rest are optional:
 
-- **Settings → System → Power & battery → Screen and sleep.** Setting **When
-  plugged in, put my device to sleep after** to **Never** makes runs certain,
-  because there's no waking up to do. Letting it sleep is fine as long as you did
-  the wake timer step above.
-- **Battery saver**, in the same place, holds back background work. If it's set to
-  switch on automatically at a high percentage, a run scheduled while it's active
-  may be delayed.
+- **Battery saver**: If it's set to switch on automatically at a high percentage, a
+  run scheduled while it's active may be delayed.
 - **Closing the lid.** In **Control Panel → Hardware and Sound → Power Options →
   Choose what closing the lid does**, **Sleep** and **Do nothing** both let runs
   happen. **Hibernate** and **Shut down** don't — both stop scheduled runs until
@@ -649,6 +676,20 @@ on a very long run. Running the search again picks them up.
 4. If a run started but nothing arrived, the email settings are the likely cause.
    Click **Send a test email**.
 
+**My desktop icon says it can't find the folder, or does nothing.** It holds the
+folder's location, so moving or renaming the folder breaks it. Start the app from
+its folder, then click **Add a shortcut…** on the *Email & schedule* tab — see
+[Step 5](#step-5--put-it-on-your-desktop-if-you-like).
+
+**I said "don't ask again" and now I want a shortcut.** Click **Add a shortcut…**
+on the *Email & schedule* tab. Saying that stops it asking; it doesn't stop you
+having one.
+
+**It said macOS wouldn't keep the Dock entry.** That happens occasionally; the
+Dock is particular about being edited underneath it. The app itself is in your
+Applications folder either way, so open that and drag **Faceplace Marketbook**
+onto the Dock yourself.
+
 **I moved the app's folder and scheduled runs stopped.** The schedule still
 points at the old location. Go to *Email & schedule*, click **Turn them off**,
 then **Turn automatic runs on** again. The tab warns about this when it notices.
@@ -661,8 +702,8 @@ reports exactly what went wrong.
 one Facebook login, so a manual run won't start while a scheduled one is going.
 Wait for it to finish. If you're sure nothing is really running — for instance the
 computer lost power partway through a run — the app clears the leftover marker by
-itself after 8 hours, or you can delete the file `.schedule/run.lock` in the app's
-folder.
+itself after 8 hours, or you can delete the file `.state/schedule/run.lock` in the
+app's folder.
 
 **A listing I know is sold still shows up.** The app only removes a listing when
 it can positively confirm it's gone, because being missing from Facebook's search

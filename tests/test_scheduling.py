@@ -25,13 +25,16 @@ from email import message_from_bytes
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-import build_gallery
+import browser
 import fb_marketplace_sweep as fb
+import locations
+import storage
 import scheduling as sc
 
 REPO = Path(__file__).resolve().parent.parent
+SRC = REPO / "src"
 
 
 def dt(s):
@@ -45,13 +48,13 @@ class Redirected(unittest.TestCase):
         self.tmp = TemporaryDirectory()
         self.root = Path(self.tmp.name)
         self._saved = {k: getattr(sc, k) for k in
-                       ("SEARCHES_PATH", "EMAIL_CONFIG_PATH", "STATE_DIR",
+                       ("SEARCHES_PATH", "EMAIL_CONFIG_PATH", "SCHEDULE_DIR",
                         "LOCK_PATH", "TICK_LOG")}
         sc.SEARCHES_PATH = self.root / "saved_searches.json"
         sc.EMAIL_CONFIG_PATH = self.root / "email_config.json"
-        sc.STATE_DIR = self.root / ".schedule"
-        sc.LOCK_PATH = sc.STATE_DIR / "run.lock"
-        sc.TICK_LOG = sc.STATE_DIR / "tick.log"
+        sc.SCHEDULE_DIR = self.root / ".schedule"
+        sc.LOCK_PATH = sc.SCHEDULE_DIR / "run.lock"
+        sc.TICK_LOG = sc.SCHEDULE_DIR / "tick.log"
         # Collect progress messages instead of printing them over the test run.
         self.logged = []
         self._real_log = sc.log
@@ -332,23 +335,23 @@ class TestDatabase(unittest.TestCase):
         self.tmp = TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.db = Path(self.tmp.name) / "test.sqlite"
-        self.con = fb.open_db(self.db)
+        self.con = storage.open_db(self.db)
         self.addCleanup(self.con.close)
 
     def row(self, item_id):
-        cols = ",".join(fb.FIELDS)
+        cols = ",".join(storage.FIELDS)
         r = self.con.execute(
             f"SELECT {cols} FROM listings WHERE item_id=?", (item_id,)).fetchone()
-        return dict(zip(fb.FIELDS, r)) if r else None
+        return dict(zip(storage.FIELDS, r)) if r else None
 
     def test_a_later_sweep_cannot_blank_a_description(self):
         # The bug this guards against emptied every description in the real
         # database: a sweep only sees search cards, so its description is always
         # blank, and the old upsert wrote that blank over the real thing.
-        fb.upsert(self.con, {"item_id": "1", "title": "old",
+        storage.upsert(self.con, {"item_id": "1", "title": "old",
                              "description": "a real description",
                              "raw_text": "raw", "image": "thumbnails/1.jpg"})
-        fb.upsert(self.con, {"item_id": "1", "title": "new", "description": "",
+        storage.upsert(self.con, {"item_id": "1", "title": "new", "description": "",
                              "raw_text": "",
                              "image": "https://scontent.example/fresh.jpg"})
         r = self.row("1")
@@ -358,14 +361,14 @@ class TestDatabase(unittest.TestCase):
         self.assertEqual(r["image"], "thumbnails/1.jpg")
 
     def test_a_real_new_description_still_wins(self):
-        fb.upsert(self.con, {"item_id": "1", "description": "first"})
-        fb.upsert(self.con, {"item_id": "1", "description": "second"})
+        storage.upsert(self.con, {"item_id": "1", "description": "first"})
+        storage.upsert(self.con, {"item_id": "1", "description": "second"})
         self.assertEqual(self.row("1")["description"], "second")
 
     def test_a_remote_image_is_upgraded_to_a_local_one(self):
-        fb.upsert(self.con, {"item_id": "1", "image": "https://x.example/a.jpg"})
+        storage.upsert(self.con, {"item_id": "1", "image": "https://x.example/a.jpg"})
         self.assertEqual(self.row("1")["image"], "https://x.example/a.jpg")
-        fb.upsert(self.con, {"item_id": "1", "image": "thumbnails/1.jpg"})
+        storage.upsert(self.con, {"item_id": "1", "image": "thumbnails/1.jpg"})
         self.assertEqual(self.row("1")["image"], "thumbnails/1.jpg")
 
     def test_a_fresh_local_path_replaces_an_older_local_path(self):
@@ -373,23 +376,23 @@ class TestDatabase(unittest.TestCase):
         # stored would point later runs at a photo in someone else's folder. This
         # is what the old "thumbs/" paths did to a scheduled run's carried-forward
         # rows: 53 of 160 images came out broken.
-        fb.upsert(self.con, {"item_id": "1", "image": "thumbs/1.jpg"})
-        fb.upsert(self.con, {"item_id": "1", "image": "thumbnails/1.jpg"})
+        storage.upsert(self.con, {"item_id": "1", "image": "thumbs/1.jpg"})
+        storage.upsert(self.con, {"item_id": "1", "image": "thumbnails/1.jpg"})
         self.assertEqual(self.row("1")["image"], "thumbnails/1.jpg")
 
     def test_a_local_path_is_not_downgraded_to_a_remote_url(self):
-        fb.upsert(self.con, {"item_id": "1", "image": "thumbnails/1.jpg"})
-        fb.upsert(self.con, {"item_id": "1", "image": "https://x.example/new.jpg"})
+        storage.upsert(self.con, {"item_id": "1", "image": "thumbnails/1.jpg"})
+        storage.upsert(self.con, {"item_id": "1", "image": "https://x.example/new.jpg"})
         self.assertEqual(self.row("1")["image"], "thumbnails/1.jpg")
 
     def test_a_blank_image_never_wins(self):
-        fb.upsert(self.con, {"item_id": "1", "image": "thumbnails/1.jpg"})
-        fb.upsert(self.con, {"item_id": "1", "image": ""})
+        storage.upsert(self.con, {"item_id": "1", "image": "thumbnails/1.jpg"})
+        storage.upsert(self.con, {"item_id": "1", "image": ""})
         self.assertEqual(self.row("1")["image"], "thumbnails/1.jpg")
 
     def test_ordinary_columns_are_still_overwritten(self):
-        fb.upsert(self.con, {"item_id": "1", "price": "$100", "miles": "10"})
-        fb.upsert(self.con, {"item_id": "1", "price": "$90", "miles": "12"})
+        storage.upsert(self.con, {"item_id": "1", "price": "$100", "miles": "10"})
+        storage.upsert(self.con, {"item_id": "1", "price": "$90", "miles": "12"})
         r = self.row("1")
         self.assertEqual((r["price"], r["miles"]), ("$90", "12"))
 
@@ -400,16 +403,16 @@ class TestDatabase(unittest.TestCase):
                               "run_items"}, names)
 
     def test_opening_twice_changes_nothing(self):
-        fb.upsert(self.con, {"item_id": "1", "description": "keep me"})
+        storage.upsert(self.con, {"item_id": "1", "description": "keep me"})
         self.con.commit()
-        second = fb.open_db(self.db)
+        second = storage.open_db(self.db)
         self.addCleanup(second.close)
         self.assertEqual(second.execute(
             "SELECT description FROM listings WHERE item_id='1'").fetchone()[0],
             "keep me")
 
     def test_migrating_the_real_database_preserves_everything(self):
-        real = REPO / "marketplace_results.sqlite"
+        real = REPO / ".state" / "marketplace_results.sqlite"
         if not real.exists():
             self.skipTest("no real database to migrate")
         import shutil
@@ -424,7 +427,7 @@ class TestDatabase(unittest.TestCase):
                                "LIKE 'thumbs/%'").fetchone()[0]
         finally:
             c.close()
-        con = fb.open_db(copy)
+        con = storage.open_db(copy)
         self.addCleanup(con.close)
         self.assertEqual(con.execute("SELECT count(*) FROM listings").fetchone()[0],
                          before)
@@ -436,7 +439,7 @@ class TestRunBookkeeping(unittest.TestCase):
     def setUp(self):
         self.tmp = TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.con = fb.open_db(Path(self.tmp.name) / "t.sqlite")
+        self.con = storage.open_db(Path(self.tmp.name) / "t.sqlite")
         self.addCleanup(self.con.close)
 
     def test_a_recorded_run_becomes_the_previous_result_set(self):
@@ -460,9 +463,9 @@ class TestRunBookkeeping(unittest.TestCase):
         self.assertEqual(sc.previous_item_ids(self.con, "s1"), ["a"])
 
     def test_rows_for_ids_reads_back_full_listings(self):
-        fb.upsert(self.con, {"item_id": "a", "title": "Rover", "price": "$1"})
+        storage.upsert(self.con, {"item_id": "a", "title": "Rover", "price": "$1"})
         self.con.commit()
-        rows = sc.rows_for_ids(self.con, ["a", "missing"], fb.FIELDS)
+        rows = sc.rows_for_ids(self.con, ["a", "missing"], storage.FIELDS)
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["title"], "Rover")
 
@@ -717,7 +720,7 @@ class TestVerifierLoop(unittest.TestCase):
     def setUp(self):
         self.tmp = TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.con = fb.open_db(Path(self.tmp.name) / "t.sqlite")
+        self.con = storage.open_db(Path(self.tmp.name) / "t.sqlite")
         self.addCleanup(self.con.close)
 
     class FakeCtx:
@@ -993,10 +996,10 @@ class TestAttachments(unittest.TestCase):
             rows.append(listing(iid, f"Listing {i}", image=img))
         csv_path = self.dir / "results.csv"
         with open(csv_path, "w", newline="", encoding="utf-8") as f:
-            w = csv.DictWriter(f, fieldnames=fb.FIELDS)
+            w = csv.DictWriter(f, fieldnames=storage.FIELDS)
             w.writeheader()
             for r in rows:
-                w.writerow({k: r.get(k, "") for k in fb.FIELDS})
+                w.writerow({k: r.get(k, "") for k in storage.FIELDS})
         return csv_path
 
     def test_two_attachments_are_produced(self):
@@ -1081,26 +1084,26 @@ class TestReconciliation(unittest.TestCase):
 
     def test_absent_from_the_feed_is_not_enough_to_remove_it(self):
         feed = {"a": listing("a", "still listed")}
-        new_ids, carried = fb.reconcile_with_previous(feed, self.prev, gone_ids=set())
+        new_ids, carried = storage.reconcile_with_previous(feed, self.prev, gone_ids=set())
         self.assertEqual(carried, 2)
         self.assertEqual(sorted(feed), ["a", "b", "c"])
         self.assertEqual(new_ids, [])
 
     def test_a_confirmed_removal_drops_out(self):
         feed = {"a": listing("a", "still listed")}
-        _, carried = fb.reconcile_with_previous(feed, self.prev, gone_ids={"b"})
+        _, carried = storage.reconcile_with_previous(feed, self.prev, gone_ids={"b"})
         self.assertEqual(carried, 1)
         self.assertEqual(sorted(feed), ["a", "c"])
 
     def test_new_listings_are_identified(self):
         feed = {"a": listing("a", "x"), "z": listing("z", "brand new")}
-        new_ids, _ = fb.reconcile_with_previous(feed, self.prev, gone_ids=set())
+        new_ids, _ = storage.reconcile_with_previous(feed, self.prev, gone_ids=set())
         self.assertEqual(new_ids, ["z"])
 
     def test_the_feed_version_of_a_listing_wins_over_the_stored_one(self):
         # Prices change; the fresh row is the one to keep.
         feed = {"a": listing("a", "old a", price="$999")}
-        fb.reconcile_with_previous(feed, self.prev, gone_ids=set())
+        storage.reconcile_with_previous(feed, self.prev, gone_ids=set())
         self.assertEqual(feed["a"]["price"], "$999")
 
     def test_a_stored_description_survives_onto_the_fresh_row(self):
@@ -1110,7 +1113,7 @@ class TestReconciliation(unittest.TestCase):
         self.prev["a"]["description"] = "a long description from last time"
         self.prev["a"]["raw_text"] = "raw"
         feed = {"a": listing("a", "still listed")}
-        fb.reconcile_with_previous(feed, self.prev, gone_ids=set())
+        storage.reconcile_with_previous(feed, self.prev, gone_ids=set())
         self.assertEqual(feed["a"]["description"],
                          "a long description from last time")
         self.assertEqual(feed["a"]["raw_text"], "raw")
@@ -1118,29 +1121,29 @@ class TestReconciliation(unittest.TestCase):
     def test_a_fresh_description_is_not_overwritten_by_the_stored_one(self):
         self.prev["a"]["description"] = "old"
         feed = {"a": listing("a", "x", description="new and better")}
-        fb.reconcile_with_previous(feed, self.prev, gone_ids=set())
+        storage.reconcile_with_previous(feed, self.prev, gone_ids=set())
         self.assertEqual(feed["a"]["description"], "new and better")
 
     def test_a_new_listing_has_nothing_to_inherit(self):
         feed = {"z": listing("z", "brand new")}
-        fb.reconcile_with_previous(feed, self.prev, gone_ids=set())
+        storage.reconcile_with_previous(feed, self.prev, gone_ids=set())
         self.assertEqual(feed["z"]["description"], "")
 
     def test_everything_confirmed_gone_leaves_only_the_feed(self):
         feed = {"a": listing("a", "x")}
-        _, carried = fb.reconcile_with_previous(feed, self.prev,
+        _, carried = storage.reconcile_with_previous(feed, self.prev,
                                                 gone_ids={"b", "c"})
         self.assertEqual(carried, 0)
         self.assertEqual(list(feed), ["a"])
 
     def test_a_first_run_has_no_previous_set(self):
         feed = {"a": listing("a", "x")}
-        new_ids, carried = fb.reconcile_with_previous(feed, {}, gone_ids=set())
+        new_ids, carried = storage.reconcile_with_previous(feed, {}, gone_ids=set())
         self.assertEqual((new_ids, carried), (["a"], 0))
 
     def test_carried_rows_get_a_relevance_score(self):
         feed = {}
-        fb.reconcile_with_previous(feed, self.prev, gone_ids=set(),
+        storage.reconcile_with_previous(feed, self.prev, gone_ids=set(),
                                     score=lambda r: 7)
         self.assertEqual([r["_score"] for r in feed.values()], [7, 7, 7])
 
@@ -1352,9 +1355,9 @@ import sys, time
 from pathlib import Path
 sys.path.insert(0, sys.argv[1])
 import scheduling as sc
-sc.STATE_DIR = Path(sys.argv[2])
-sc.LOCK_PATH = sc.STATE_DIR / "run.lock"
-sc.TICK_LOG = sc.STATE_DIR / "tick.log"
+sc.SCHEDULE_DIR = Path(sys.argv[2])
+sc.LOCK_PATH = sc.SCHEDULE_DIR / "run.lock"
+sc.TICK_LOG = sc.SCHEDULE_DIR / "tick.log"
 try:
     with sc.run_lock("child"):
         print("GOT")
@@ -1367,8 +1370,8 @@ class TestRunLock(Redirected):
     def child(self):
         script = self.root / "lock_child.py"
         script.write_text(LOCK_CHILD, encoding="utf-8")
-        r = subprocess.run([sys.executable, str(script), str(REPO),
-                            str(sc.STATE_DIR)],
+        r = subprocess.run([sys.executable, str(script), str(SRC),
+                            str(sc.SCHEDULE_DIR)],
                            capture_output=True, text=True, timeout=60)
         return r.stdout.strip()
 
@@ -1394,7 +1397,7 @@ class TestRunLock(Redirected):
         self.assertEqual(self.child(), "GOT")
 
     def test_a_lock_left_by_a_dead_process_is_reclaimed(self):
-        sc.STATE_DIR.mkdir(parents=True, exist_ok=True)
+        sc.SCHEDULE_DIR.mkdir(parents=True, exist_ok=True)
         sc.LOCK_PATH.write_text(json.dumps(
             {"pid": 999_999, "what": "crashed run",
              "started": sc.iso(sc.now_local())}), encoding="utf-8")
@@ -1402,7 +1405,7 @@ class TestRunLock(Redirected):
             pass
 
     def test_an_ancient_lock_is_reclaimed_even_if_the_pid_is_alive(self):
-        sc.STATE_DIR.mkdir(parents=True, exist_ok=True)
+        sc.SCHEDULE_DIR.mkdir(parents=True, exist_ok=True)
         old = sc.iso(sc.now_local() - timedelta(hours=sc.LOCK_STALE_HOURS + 1))
         sc.LOCK_PATH.write_text(json.dumps(
             {"pid": os.getpid(), "what": "wedged run", "started": old}),
@@ -1411,7 +1414,7 @@ class TestRunLock(Redirected):
             pass
 
     def test_an_unreadable_lock_is_reclaimed(self):
-        sc.STATE_DIR.mkdir(parents=True, exist_ok=True)
+        sc.SCHEDULE_DIR.mkdir(parents=True, exist_ok=True)
         sc.LOCK_PATH.write_text("garbage", encoding="utf-8")
         with sc.run_lock("new run"):
             pass
@@ -1423,6 +1426,17 @@ class TestRunLock(Redirected):
                     pass
             except sc.AlreadyRunning as e:
                 self.assertIn("scheduled run", str(e))
+
+    def test_finishing_leaves_a_lock_that_is_no_longer_ours_alone(self):
+        # A run that outlived the stale threshold had its lock reclaimed and
+        # replaced by a newer run. Finishing must not delete the new holder's
+        # lock, or a third run could start alongside the second.
+        with sc.run_lock("first"):
+            sc.LOCK_PATH.unlink()
+            sc.LOCK_PATH.write_text(json.dumps(
+                {"pid": 999_999, "what": "newer run",
+                 "started": sc.iso(sc.now_local())}), encoding="utf-8")
+        self.assertTrue(sc.LOCK_PATH.exists())
 
 
 # ------------------------------------------------- the whole run, minus a browser
@@ -1438,10 +1452,10 @@ class TestScheduledPipeline(Redirected):
         smtplib.SMTP = RecordingSMTP
         self.addCleanup(lambda: setattr(smtplib, "SMTP", real_smtp))
 
-        self._fb = {"DB_PATH": fb.DB_PATH, "HERE": fb.HERE}
-        fb.DB_PATH = self.root / "db.sqlite"
-        fb.HERE = self.root
-        self.addCleanup(self._restore_fb)
+        self._storage = {"DB_PATH": storage.DB_PATH, "RUNS_DIR": storage.RUNS_DIR}
+        storage.DB_PATH = self.root / "db.sqlite"
+        storage.RUNS_DIR = self.root / "runs"
+        self.addCleanup(self._restore_storage)
         # pmset would really try to schedule a wake, so stub it out.
         real_wake = sc.rearm_wake
         sc.rearm_wake = lambda *a, **k: False
@@ -1451,9 +1465,9 @@ class TestScheduledPipeline(Redirected):
                               "app_password": "pw", "default_to": "me@gmail.com"})
         self.calls = []
 
-    def _restore_fb(self):
-        for k, v in self._fb.items():
-            setattr(fb, k, v)
+    def _restore_storage(self):
+        for k, v in self._storage.items():
+            setattr(storage, k, v)
 
     def stub_sweep(self, batches):
         """Each entry is (rows found in the feed, listings confirmed removed).
@@ -1465,22 +1479,22 @@ class TestScheduledPipeline(Redirected):
             prev_by_id = {r["item_id"]: dict(r)
                           for r in (kw.get("previous_rows") or [])}
             all_rows = {r["item_id"]: dict(r) for r in feed_rows}
-            new_ids, _ = fb.reconcile_with_previous(
+            new_ids, _ = storage.reconcile_with_previous(
                 all_rows, prev_by_id, {r["item_id"] for r in removed})
             rows = list(all_rows.values())
 
             csv_path = run_dir / "results.csv"
             with open(csv_path, "w", newline="", encoding="utf-8") as f:
-                w = csv.DictWriter(f, fieldnames=fb.FIELDS)
+                w = csv.DictWriter(f, fieldnames=storage.FIELDS)
                 w.writeheader()
                 for r in rows:
-                    w.writerow({k: r.get(k, "") for k in fb.FIELDS})
+                    w.writerow({k: r.get(k, "") for k in storage.FIELDS})
             (run_dir / "run.json").write_text(
                 json.dumps({"query": query}), encoding="utf-8")
             (run_dir / "gallery.html").write_text("<html></html>", encoding="utf-8")
-            con = fb.open_db(fb.DB_PATH)
+            con = storage.open_db(storage.DB_PATH)
             for r in rows:
-                fb.upsert(con, r)
+                storage.upsert(con, r)
             con.commit()
             con.close()
             return {
@@ -1489,6 +1503,7 @@ class TestScheduledPipeline(Redirected):
                 "started": sc.iso(sc.now_local()),
                 "finished": sc.iso(sc.now_local()), "duration_seconds": 42.0,
                 "new_ids": new_ids,
+                "feed_ids": [r["item_id"] for r in feed_rows],
                 "total_ids": [r["item_id"] for r in rows],
                 "new_rows": [r for r in rows if r["item_id"] in set(new_ids)],
                 "removed": removed, "descriptions_fetched": len(new_ids),
@@ -1520,7 +1535,7 @@ class TestScheduledPipeline(Redirected):
     def test_the_run_is_recorded_in_the_database(self):
         rec = self.make()
         sc.run_saved_search(rec, sweep=self.stub_sweep([(self.batch("a", "b"), [])]))
-        con = fb.open_db(fb.DB_PATH)
+        con = storage.open_db(storage.DB_PATH)
         self.addCleanup(con.close)
         row = con.execute("SELECT search_id, new_count, total_count, "
                           "removed_count, status FROM search_runs").fetchone()
@@ -1606,7 +1621,7 @@ class TestScheduledPipeline(Redirected):
                 "marker": '"is_sold":true'}
         _, second = self.two_runs(self.batch("a", "b"), removed=[sold])
         self.assertIn("SOLD (1)", second["report"]["text"])
-        con = fb.open_db(fb.DB_PATH)
+        con = storage.open_db(storage.DB_PATH)
         self.addCleanup(con.close)
         self.assertEqual(con.execute(
             "SELECT removed_count FROM search_runs ORDER BY run_id DESC LIMIT 1"
@@ -1615,10 +1630,30 @@ class TestScheduledPipeline(Redirected):
     def test_listings_in_the_feed_are_marked_alive_for_free(self):
         rec = self.make()
         sc.run_saved_search(rec, sweep=self.stub_sweep([(self.batch("a", "b"), [])]))
-        con = fb.open_db(fb.DB_PATH)
+        con = storage.open_db(storage.DB_PATH)
         self.addCleanup(con.close)
         # Nothing needs re-checking straight after a run that saw them.
         self.assertEqual(sc.needs_verifying(con, ["a", "b"], 24), [])
+
+    def test_a_carried_listing_is_not_stamped_alive_again(self):
+        # 'c' vanished from the feed on run two and was only carried forward.
+        # If the run refreshed its last_verified anyway, it would never come
+        # due for re-checking and a sold listing could be kept forever.
+        rec = self.make(interval={"every": 5, "unit": "minutes"})
+        sweep = self.stub_sweep([(self.batch("a", "b", "c"), []),
+                                 (self.batch("a", "b"), [])])
+        sc.run_saved_search(rec, sweep=sweep)
+        con = storage.open_db(storage.DB_PATH)
+        self.addCleanup(con.close)
+        old = sc.iso(sc.now_local() - timedelta(days=3))
+        con.execute("UPDATE listing_state SET last_verified=? "
+                    "WHERE item_id='c'", (old,))
+        con.commit()
+        sc.run_saved_search(sc.load_searches()[0], sweep=sweep)
+        self.assertEqual(con.execute(
+            "SELECT last_verified FROM listing_state WHERE item_id='c'"
+        ).fetchone()[0], old)
+        self.assertEqual(sc.needs_verifying(con, ["c"], 24), ["c"])
 
     # -- warnings -----------------------------------------------------------
     def test_a_short_radius_warns_but_the_run_still_finishes(self):
@@ -1646,6 +1681,15 @@ class TestScheduledPipeline(Redirected):
         self.assertTrue(any("asleep or switched off" in w
                             for w in summary["report"]["warnings"]))
 
+    def test_run_now_is_late_by_definition_and_does_not_warn_about_it(self):
+        rec = self.make(name="Defender 110")
+        searches = sc.load_searches()
+        searches[0]["next_run"] = sc.iso(sc.now_local() - timedelta(hours=9))
+        sc.save_searches(searches)
+        results = sc.tick(force="Defender 110",
+                          sweep=self.stub_sweep([(self.batch("a"), [])]))
+        self.assertEqual(results[0]["report"]["warnings"], [])
+
     def test_an_on_time_run_has_no_warnings(self):
         rec = self.make()
         summary = sc.run_saved_search(rec,
@@ -1661,7 +1705,7 @@ class TestScheduledPipeline(Redirected):
                                                           - timedelta(minutes=1))})
 
         def boom(*a, **kw):
-            raise fb.SessionExpired("no c_user cookie")
+            raise browser.SessionExpired("no c_user cookie")
         results = sc.tick(sweep=boom)
         self.assertEqual(results, [])
         self.assertEqual(len(RecordingSMTP.sent), 1)
@@ -1794,8 +1838,8 @@ class TestScheduleFiles(unittest.TestCase):
         # explain the block.
         xml = sc.mac_plist()
         self.assertIn(str(sc.AGENT_LOG), xml)
-        self.assertNotIn(str(sc.STATE_DIR / "launchd.log"), xml)
-        self.assertFalse(str(sc.AGENT_LOG).startswith(str(sc.HERE)))
+        self.assertNotIn(str(sc.SCHEDULE_DIR / "launchd.log"), xml)
+        self.assertFalse(str(sc.AGENT_LOG).startswith(str(sc.ROOT)))
 
 
 DENVER = "https://www.facebook.com/marketplace/denver/search/?query=x"
@@ -1810,10 +1854,10 @@ class TestCities(unittest.TestCase):
     def setUp(self):
         self.tmp = TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.orig = (fb.LOC_CACHE, fb.USER_LOC_CACHE)
-        fb.LOC_CACHE = Path(self.tmp.name) / "locations.json"
-        fb.USER_LOC_CACHE = Path(self.tmp.name) / "my_locations.json"
-        self.write(fb.BUILTIN_LOCATIONS)
+        self.orig = (locations.LOC_CACHE, locations.USER_LOC_CACHE)
+        locations.LOC_CACHE = Path(self.tmp.name) / "locations.json"
+        locations.USER_LOC_CACHE = Path(self.tmp.name) / "my_locations.json"
+        self.write(locations.BUILTIN_LOCATIONS)
         # The migration announces itself, which belongs in a terminal and not in
         # the middle of test output.
         quiet = redirect_stdout(io.StringIO())
@@ -1821,119 +1865,101 @@ class TestCities(unittest.TestCase):
         self.addCleanup(quiet.__exit__, None, None, None)
 
     def tearDown(self):
-        fb.LOC_CACHE, fb.USER_LOC_CACHE = self.orig
+        locations.LOC_CACHE, locations.USER_LOC_CACHE = self.orig
 
     def write(self, mapping):
-        fb.LOC_CACHE.write_text(json.dumps(mapping), encoding="utf-8")
+        locations.LOC_CACHE.write_text(json.dumps(mapping), encoding="utf-8")
 
     def write_mine(self, mapping):
-        fb.USER_LOC_CACHE.write_text(json.dumps(mapping), encoding="utf-8")
+        locations.USER_LOC_CACHE.write_text(json.dumps(mapping), encoding="utf-8")
 
     # ------------------------------------------------ the shipped list
     def test_a_missing_shipped_file_falls_back_to_the_built_ins(self):
-        fb.LOC_CACHE.unlink()
-        self.assertEqual(fb.load_locations(), fb.BUILTIN_LOCATIONS)
+        locations.LOC_CACHE.unlink()
+        self.assertEqual(locations.load_locations(), locations.BUILTIN_LOCATIONS)
 
     def test_a_corrupt_shipped_file_falls_back_to_the_built_ins(self):
         for junk in ("{ not json", "[1, 2, 3]", ""):
             with self.subTest(junk=junk):
-                fb.LOC_CACHE.write_text(junk, encoding="utf-8")
-                self.assertEqual(fb.load_locations(), fb.BUILTIN_LOCATIONS)
+                locations.LOC_CACHE.write_text(junk, encoding="utf-8")
+                self.assertEqual(locations.load_locations(), locations.BUILTIN_LOCATIONS)
 
     def test_a_deleted_built_in_comes_back(self):
         # Whatever removed it — hand-editing, an older version, a bad merge — the
         # coverage hole shouldn't be permanent.
-        short = dict(fb.BUILTIN_LOCATIONS)
+        short = dict(locations.BUILTIN_LOCATIONS)
         short.pop("Boston, MA")
         self.write(short)
-        self.assertIn("Boston, MA", fb.load_locations())
+        self.assertIn("Boston, MA", locations.load_locations())
 
     def test_the_shipped_file_is_never_written_to(self):
         # The whole point of the split: adding a city of your own leaves the
         # tracked file byte-for-byte as it was.
-        before = fb.LOC_CACHE.read_bytes()
-        fb.add_location("Denver, CO", DENVER)
-        fb.remove_location("Denver, CO")
-        fb.load_locations()
-        self.assertEqual(fb.LOC_CACHE.read_bytes(), before)
+        before = locations.LOC_CACHE.read_bytes()
+        locations.add_location("Denver, CO", DENVER)
+        locations.remove_location("Denver, CO")
+        locations.load_locations()
+        self.assertEqual(locations.LOC_CACHE.read_bytes(), before)
 
     def test_the_file_can_correct_a_segment_facebook_changed(self):
-        self.write({**fb.BUILTIN_LOCATIONS, "Boston, MA": "boston-new-id"})
-        self.assertEqual(fb.base_locations()["Boston, MA"], "boston-new-id")
+        self.write({**locations.BUILTIN_LOCATIONS, "Boston, MA": "boston-new-id"})
+        self.assertEqual(locations.base_locations()["Boston, MA"], "boston-new-id")
 
-    def test_a_name_the_file_adds_is_yours_not_shipped(self):
-        # Otherwise a city left in the old file by an earlier version would count
-        # as shipped, and could never be removed.
-        self.write({**fb.BUILTIN_LOCATIONS, "Reno, NV": "reno"})
-        self.assertFalse(fb.is_builtin("Reno, NV"))
-        self.assertIn("Reno, NV", fb.load_locations())
-        _, err = fb.remove_location("Reno, NV")
-        self.assertIsNone(err)
-        self.assertNotIn("Reno, NV", fb.load_locations())
+    def test_a_name_the_file_adds_is_ignored(self):
+        # locations.json is read for segments, not for membership. Which cities
+        # ship is decided in code, and your own go in your own file.
+        self.write({**locations.BUILTIN_LOCATIONS, "Reno, NV": "reno"})
+        self.assertFalse(locations.is_builtin("Reno, NV"))
+        locs = locations.load_locations()
+        self.assertNotIn("Reno, NV", locs)
+        self.assertEqual(len(locs), len(locations.BUILTIN_LOCATIONS))
 
     # ------------------------------------------------ your own cities
     def test_your_own_cities_go_in_your_own_file_and_come_last(self):
-        fb.add_location("Denver, CO", DENVER)
-        self.assertEqual(fb.read_locations_file(fb.USER_LOC_CACHE),
+        locations.add_location("Denver, CO", DENVER)
+        self.assertEqual(locations.read_locations_file(locations.USER_LOC_CACHE),
                          {"Denver, CO": "denver"})
-        self.assertEqual(list(fb.load_locations())[-1], "Denver, CO")
+        self.assertEqual(list(locations.load_locations())[-1], "Denver, CO")
 
     def test_a_built_in_cannot_be_removed(self):
-        locs, err = fb.remove_location("Boston, MA")
+        locs, err = locations.remove_location("Boston, MA")
         self.assertIn("can't be removed", err)
         self.assertIn("Boston, MA", locs)
-        self.assertIn("Boston, MA", fb.load_locations())
+        self.assertIn("Boston, MA", locations.load_locations())
 
     def test_a_city_you_added_can_be_removed(self):
-        fb.add_location("Denver, CO", DENVER)
-        locs, err = fb.remove_location("Denver, CO")
+        locations.add_location("Denver, CO", DENVER)
+        locs, err = locations.remove_location("Denver, CO")
         self.assertIsNone(err)
         self.assertNotIn("Denver, CO", locs)
-        self.assertNotIn("Denver, CO", fb.load_locations())
+        self.assertNotIn("Denver, CO", locations.load_locations())
 
     def test_removing_a_city_that_isnt_there_says_so(self):
-        _, err = fb.remove_location("Atlantis, XX")
+        _, err = locations.remove_location("Atlantis, XX")
         self.assertIn("no city", err)
 
     def test_your_own_file_cannot_shadow_a_shipped_city(self):
-        # A stale entry left over from the old single-file days must not be able
-        # to repoint a shipped city at a different place.
+        # An entry under a shipped city's name must not repoint it somewhere else.
         self.write_mine({"Boston, MA": "somewhere-else"})
-        self.assertEqual(fb.load_locations()["Boston, MA"],
-                         fb.BUILTIN_LOCATIONS["Boston, MA"])
+        self.assertEqual(locations.load_locations()["Boston, MA"],
+                         locations.BUILTIN_LOCATIONS["Boston, MA"])
 
-    # ------------------------------------------------ moving off the old layout
-    def test_a_city_from_the_old_single_file_layout_is_moved_not_lost(self):
-        self.write({**fb.BUILTIN_LOCATIONS, "Provo, UT": "106066949424984"})
-        locs = fb.load_locations()
-        self.assertEqual(locs["Provo, UT"], "106066949424984")
-        self.assertEqual(fb.read_locations_file(fb.USER_LOC_CACHE),
-                         {"Provo, UT": "106066949424984"})
-
-    def test_the_move_happens_once_and_respects_a_later_removal(self):
-        self.write({**fb.BUILTIN_LOCATIONS, "Provo, UT": "106066949424984"})
-        fb.load_locations()
-        fb.remove_location("Provo, UT")
-        # locations.json still mentions it, so a second migration would undo the
-        # removal the user just asked for.
-        self.assertNotIn("Provo, UT", fb.load_locations())
-
-    def test_nothing_to_move_writes_no_file(self):
-        fb.load_locations()
-        self.assertFalse(fb.USER_LOC_CACHE.exists())
+    def test_loading_the_cities_writes_nothing(self):
+        locations.load_locations()
+        self.assertFalse(locations.USER_LOC_CACHE.exists())
 
     def test_junk_that_cannot_be_a_slug_is_refused(self):
         for text in ("", "   ", "https://example.com/nothing",
                      "https://www.facebook.com/marketplace/item/123",
                      "what about this", "!!!"):
             with self.subTest(text=text):
-                _, err = fb.add_location("Nope", text)
+                _, err = locations.add_location("Nope", text)
                 self.assertTrue(err)
 
     def test_a_slug_shaped_string_is_accepted_because_only_facebook_knows(self):
         # This is the gap the sweep has to cover: 'fdjsklfjsdkl' is a perfectly
         # well-formed slug, and nothing offline can tell it isn't a city.
-        locs, err = fb.add_location("SLC, UT", "fdjsklfjsdkl")
+        locs, err = locations.add_location("SLC, UT", "fdjsklfjsdkl")
         self.assertIsNone(err)
         self.assertEqual(locs["SLC, UT"], "fdjsklfjsdkl")
 
@@ -1990,13 +2016,13 @@ class TestMacPermissions(unittest.TestCase):
 
     def setUp(self):
         self.home = Path.home()
-        self.orig = (sc.HERE, sc.platform.system)
+        self.orig = (sc.ROOT, sc.platform.system)
 
     def tearDown(self):
-        sc.HERE, sc.platform.system = self.orig
+        sc.ROOT, sc.platform.system = self.orig
 
     def as_mac(self, folder):
-        sc.HERE = Path(folder)
+        sc.ROOT = Path(folder)
         sc.platform.system = lambda: "Darwin"
 
     def test_documents_is_flagged(self):
@@ -2026,7 +2052,7 @@ class TestMacPermissions(unittest.TestCase):
         self.assertIsNone(sc.in_protected_folder())
 
     def test_windows_and_linux_are_never_flagged(self):
-        sc.HERE = self.home / "Documents" / "mb"
+        sc.ROOT = self.home / "Documents" / "mb"
         for system in ("Windows", "Linux"):
             with self.subTest(system=system):
                 sc.platform.system = lambda s=system: s
@@ -2066,7 +2092,7 @@ class TestCheckIn(unittest.TestCase):
         sc.check_in("tick")
         beat = sc.last_check_in()
         self.assertEqual(beat["event"], "tick")
-        self.assertEqual(beat["folder"], str(sc.HERE))
+        self.assertEqual(beat["folder"], str(sc.ROOT))
         self.assertIsNotNone(sc.parse_iso(beat["at"]))
 
     def test_extra_facts_are_kept(self):
@@ -2109,10 +2135,12 @@ class TestScheduleProblems(unittest.TestCase):
         self.tmp = TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.orig = {k: getattr(sc, k) for k in
-                     ("SUPPORT_DIR", "HEARTBEAT_PATH", "schedule_installed",
-                      "schedule_points_here")}
+                     ("SUPPORT_DIR", "HEARTBEAT_PATH", "SCHEDULE_DIR", "LOCK_PATH",
+                      "schedule_installed", "schedule_points_here")}
         sc.SUPPORT_DIR = Path(self.tmp.name) / "support"
         sc.HEARTBEAT_PATH = sc.SUPPORT_DIR / "last-checkin.json"
+        sc.SCHEDULE_DIR = Path(self.tmp.name) / ".schedule"
+        sc.LOCK_PATH = sc.SCHEDULE_DIR / "run.lock"
         sc.schedule_installed = lambda: True
         sc.schedule_points_here = lambda: True
 
@@ -2154,6 +2182,19 @@ class TestScheduleProblems(unittest.TestCase):
         sc.SUPPORT_DIR.mkdir(parents=True)
         sc.HEARTBEAT_PATH.write_text(
             json.dumps({"event": "tick", "at": sc.iso(recent)}), encoding="utf-8")
+        self.assertEqual(sc.schedule_problems(), [])
+
+    def test_a_run_in_progress_explains_the_silence(self):
+        # A sweep can run for hours, during which no new tick checks in. That
+        # is normal, not a broken scheduler.
+        stale = sc.now_local() - timedelta(seconds=sc.TICK_SECONDS * 4)
+        sc.SUPPORT_DIR.mkdir(parents=True)
+        sc.HEARTBEAT_PATH.write_text(
+            json.dumps({"event": "tick", "at": sc.iso(stale)}), encoding="utf-8")
+        sc.SCHEDULE_DIR.mkdir(parents=True)
+        sc.LOCK_PATH.write_text(json.dumps(
+            {"pid": os.getpid(), "what": "scheduled run",
+             "started": sc.iso(sc.now_local())}), encoding="utf-8")
         self.assertEqual(sc.schedule_problems(), [])
 
 

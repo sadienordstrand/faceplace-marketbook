@@ -1,0 +1,316 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<title>Faceplace Marketbook — Search Setup</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="__FONTS__" rel="stylesheet">
+<style>__TOKENS__
+__CSS__</style>
+</head><body>
+<header>
+  <div class="brand">Faceplace Marketbook</div>
+  <div class="sub">Search setup</div>
+  <div class="tabs" role="tablist">
+    <button id="tabNew" role="tab" aria-selected="true">New search</button>
+    <button id="tabSaved" role="tab" aria-selected="false">Saved searches</button>
+    <button id="tabEmail" role="tab" aria-selected="false">Email &amp; schedule</button>
+  </div>
+</header>
+<main>
+<div class="pane" id="paneNew">
+  <section>
+    <h2>Search</h2>
+    <label class="field">
+      <span class="lab">Query</span>
+      <input type="text" id="query" placeholder="defender 110" autofocus>
+      <div class="hint">
+        Facebook decides what to return, and it isn't strict keyword matching —
+        it treats your words as a guideline and mixes in related inventory, so most of
+        what comes back won't contain your search term at all. This script then
+        filters that down.
+        <ul>
+          <li>The script will drop listings whose titles don't contain
+            <i>every</i> 3+ letter word in your query, so more words means narrower results.</li>
+          <li>Words match at their start, so "defender" also catches
+            "Defenders".</li>
+          <li>The script ignores 1-2 letter words in your query ("of",
+            "VW").</li>
+          <li>The script also ignores any numbers in your query (like "110" or
+            "1980") when deciding what to drop, but it still helps to include
+            numbers, because it helps the script know which listings to
+            prioritize.</li>
+        </ul>
+      </div>
+    </label>
+    <div class="toggles">
+      <div class="tog" id="exact" role="button" tabindex="0" aria-pressed="false">
+        <span class="box">✓</span>Exact matching
+      </div>
+    </div>
+    <div class="hint">
+      <b>Exact matching</b> asks Facebook to be much stricter about matching your query, but often ends up excluding real results. It's useful for if you want fast results, but in general, it's better to leave it off.
+    </div>
+  </section>
+
+  <section>
+    <div class="seclab"><h2>Cities</h2>
+      <div class="grp">
+        <button class="mini" id="allCities">All</button>
+        <button class="mini" id="noCities">None</button>
+      </div>
+    </div>
+    <div class="hint" style="margin: 0 0 14px">The search will include a 500 mile
+      radius around each selected city. Select all cities to get search results
+      from the entire continental US.</div>
+    <div class="cities" id="cities"></div>
+
+    <div class="addcity">
+      <input type="text" id="new_city_label" placeholder="Denver, CO">
+      <input type="text" id="new_city_url"
+             placeholder="paste the Marketplace link for that city">
+      <button class="mini" id="addCity">Add city</button>
+    </div>
+    <div class="hint addcity-msg" id="addCityMsg">Cities you add are saved in your
+      own file, and you can remove them again by hovering over them. The twelve
+      the app comes with are permanent — untick one to skip it for a run.</div>
+
+    <details class="help">
+      <summary>How to get a city's link</summary>
+      <div class="hint">
+        <ol>
+          <li>Open <b>facebook.com/marketplace</b> in your browser.</li>
+          <li>Click the location on the left sidebar — it shows whatever
+            city you're currently browsing.</li>
+          <li>Type the city you want, pick it from the list, set the radius to
+            <b>500 miles</b>, and click Apply.</li>
+          <li>Copy the whole web address out of the address bar and paste it in
+            the box above. It looks like
+            <b>facebook.com/marketplace/denver/...</b> — the part right after
+            "marketplace" is what this needs, and it's fine if it's a long
+            number instead of a name.</li>
+        </ol>
+        <p style="margin: 10px 0 0">Leave the name box blank and it'll name the
+          city after that link.</p>
+      </div>
+    </details>
+  </section>
+
+  <section>
+    <h2>Quality filters</h2>
+    <div class="row">
+      <label class="field"><span class="lab">Min price ($)</span>
+        <input type="number" id="min_price" placeholder="any" min="0"></label>
+      <label class="field"><span class="lab">Max price ($)</span>
+        <input type="number" id="max_price" placeholder="any" min="0"></label>
+    </div>
+    <label class="field"><span class="lab">Exclude terms</span>
+      <input type="text" id="exclude" placeholder="rhd, can am, hot wheels">
+      <div class="hint">Comma separated. Punctuation and spaces are ignored when
+        matching, so "can am" also catches "Can-Am" and "CANAM".</div>
+    </label>
+  </section>
+
+  <section>
+    <h2>Stages</h2>
+    <div class="toggles">
+      <div class="tog" id="do_descriptions" role="button" tabindex="0" aria-pressed="true">
+        <span class="box">✓</span>Retrieve Descriptions
+      </div>
+      <div class="tog" id="do_thumbs" role="button" tabindex="0" aria-pressed="true">
+        <span class="box">✓</span>Retrieve Thumbnails
+      </div>
+      <div class="tog" id="do_gallery" role="button" tabindex="0" aria-pressed="true">
+        <span class="box">✓</span>Build gallery
+      </div>
+      <div class="tog" id="debug_dump" role="button" tabindex="0" aria-pressed="false">
+        <span class="box">✓</span>Dump raw payloads
+      </div>
+    </div>
+    <div class="hint"><b>Dump raw payloads</b> saves the raw JSON Facebook sent
+      into the run folder's <code>debug/</code>. Only useful for troubleshooting. For example,
+      if titles or prices start coming back empty, that means Facebook changed the shape of
+      its data, and the dump is what you'd inspect to fix it. It's bulky —
+      roughly 8 MB per city — so leave it off normally.</div>
+  </section>
+
+  <section id="descBlock">
+    <h2>Description Retrieval</h2>
+    <div class="lab">Retrieval pace</div>
+    <div class="seg" id="pace"></div>
+    <div class="hint">Select "Slow" if you're worried about Facebook flagging
+      your account for bot activity.</div>
+    <div class="stack" style="margin-top:18px">
+      <label class="field"><span class="lab">Limit (blank = all)</span>
+        <input type="number" id="limit" placeholder="all" min="1">
+        <div class="hint">This caps how many listings get a description, highest
+          relevance first, so a limit of 100 fetches descriptions for the 100 most promising
+          matches and leaves the rest with just their card details.</div>
+      </label> 
+      <label class="field"><span class="lab">Ask above (minutes, blank = never)</span>
+        <input type="number" id="descriptions_budget" value="__BUDGET__"
+               placeholder="never ask" min="0">
+        <div class="hint">If retrieving descriptions for all listings would take
+          longer than this many minutes, the run pauses in the terminal and
+          offers you three choices: retrieve descriptions for as many as it can
+          in the allotted time, do all of them anyway, or skip description
+          retrieval. Leave it blank to never ask.</div>
+      </label>
+    </div>
+  </section>
+
+  <section id="saveBlock">
+    <h2>Run this on a schedule</h2>
+    <div class="hint" style="margin: 0 0 16px">Save these settings under a name
+      and this search will run itself, then email you what it found. It only
+      fetches descriptions and photos for listings it hasn't seen before, so
+      later runs are much quicker than the first one.</div>
+    <label class="field"><span class="lab">Name this search</span>
+      <input type="text" id="save_name" placeholder="Defender 110">
+    </label>
+    <label class="field"><span class="lab">Email the report to</span>
+      <input type="text" id="save_email" placeholder="you@example.com">
+      <div class="hint">Leave blank to use the address on the
+        <b>Email &amp; schedule</b> tab.</div>
+    </label>
+    <div class="lab">How often</div>
+    <div class="every">
+      <div class="num"><input type="number" id="save_every" value="1" min="1"></div>
+      <div class="unit"><select id="save_unit"></select></div>
+    </div>
+    <div class="note" id="saveWarn" hidden></div>
+    <div class="note" id="saveMsg" hidden></div>
+    <div class="acts" style="display:flex; gap:9px; margin-top:16px">
+      <button class="mini" id="saveSearch">Save scheduled search</button>
+      <button class="mini" id="cancelEdit" hidden>Stop editing</button>
+    </div>
+  </section>
+</div>
+
+<div class="pane" id="paneSaved" hidden>
+  <section>
+    <div class="seclab"><h2>Saved searches</h2>
+      <div class="grp"><button class="mini" id="refreshSaved">Refresh</button></div>
+    </div>
+    <div class="hint" style="margin: 0 0 16px">These run on their own and email
+      you a report. Editing one loads it back into the <b>New search</b> tab.</div>
+    <div class="saved" id="savedList"></div>
+    <div class="note" id="savedMsg" hidden></div>
+  </section>
+</div>
+
+<div class="pane" id="paneEmail" hidden>
+  <section>
+    <h2>Automatic runs</h2>
+    <div class="schedstate">
+      <span class="dot" id="schedDot"></span>
+      <span class="lab" style="margin:0" id="schedState">Checking…</span>
+    </div>
+    <div class="hint" style="margin: 10px 0 14px" id="schedHint"></div>
+    <div class="blocked" id="schedProblem" hidden></div>
+    <div class="acts" style="display:flex; gap:9px">
+      <button class="mini" id="schedOn">Turn automatic runs on</button>
+      <button class="mini" id="schedOff">Turn them off</button>
+    </div>
+    <div class="note" id="schedMsg" hidden></div>
+  </section>
+
+  <section>
+    <h2>Email</h2>
+    <div class="hint" style="margin: 0 0 16px">Reports are sent from your own
+      email account. For Gmail you need an <b>app password</b>, not your normal
+      password — see the steps below. An app password gives this tool full access
+      to that mailbox, so it's stored in <code>.state/email_config.json</code>, which is
+      kept out of version control.</div>
+    <label class="field"><span class="lab">Your email address</span>
+      <input type="text" id="mail_address" placeholder="you@gmail.com">
+    </label>
+    <label class="field"><span class="lab">App password</span>
+      <input type="text" id="mail_password" placeholder="sixteen letters from Google">
+    </label>
+    <div class="row">
+      <label class="field"><span class="lab">Provider</span>
+        <select id="mail_provider">
+          <option value="gmail">Gmail</option>
+          <option value="outlook">Outlook</option>
+          <option value="icloud">iCloud</option>
+          <option value="other">Other (set server below)</option>
+        </select>
+      </label>
+      <label class="field"><span class="lab">Send reports to</span>
+        <input type="text" id="mail_to" placeholder="same as your address">
+      </label>
+    </div>
+    <div class="row" id="mailHostRow" hidden>
+      <label class="field"><span class="lab">SMTP server</span>
+        <input type="text" id="mail_host" placeholder="mail.example.com"></label>
+      <label class="field"><span class="lab">Port</span>
+        <input type="number" id="mail_port" placeholder="587" min="1"></label>
+    </div>
+    <div class="acts" style="display:flex; gap:9px; margin-top:4px">
+      <button class="mini" id="saveMail">Save</button>
+      <button class="mini" id="testMail">Send a test email</button>
+    </div>
+    <div class="note" id="mailMsg" hidden></div>
+
+    <details class="help">
+      <summary>How to get a Gmail app password</summary>
+      <div class="hint">
+        <ol>
+          <li>Go to <b>myaccount.google.com</b> and sign in.</li>
+          <li>Open <b>Security & sign-in</b> in the left sidebar.</li>
+          <li>Turn on <b>2-Step Verification</b> if it isn't already. App
+            passwords don't work without it.</li>
+          <li>Search that page for <b>App passwords</b> and open it.</li>
+          <li>Type a name like <b>Faceplace Marketbook</b> and click <b>Create</b>.</li>
+          <li>Google shows a sixteen-letter password. Copy it into the
+            box above. You can include the spaces or leave them out.</li>
+        </ol>
+        <p style="margin: 10px 0 0">Because you're sending to yourself, Gmail may
+          file the report under <b>Sent Mail</b> instead of your inbox — look
+          there too. Sending reports to a different address avoids this.</p>
+      </div>
+    </details>
+  </section>
+
+  <section>
+    <h2>Shortcut</h2>
+    <div class="hint" style="margin: 0 0 14px">Puts a double-clickable
+      <b>Faceplace Marketbook</b> icon where you can reach it, so starting a
+      search doesn't mean finding this folder first. You're offered one on a first
+      launch; this is here for afterwards.</div>
+    <div class="acts" style="display:flex; gap:9px">
+      <button class="mini" id="shortcutOpen">Add a shortcut…</button>
+    </div>
+    <div class="note" id="shortcutOpenMsg" hidden></div>
+  </section>
+</div>
+</main>
+<footer>
+  <div class="est" id="est"></div>
+  <div class="actions">
+    <button class="cancel" id="cancel">Cancel</button>
+    <button class="go" id="start">Start sweep</button>
+  </div>
+</footer>
+
+<div class="scrim" id="shortcutAsk" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="shortcutTitle">
+    <h2 id="shortcutTitle">Add a shortcut?</h2>
+    <div class="hint" id="shortcutWhy"></div>
+    <div class="toggles" id="shortcutPlaces"></div>
+    <div class="hint" id="shortcutNote"></div>
+    <div class="note" id="shortcutMsg" hidden></div>
+    <div class="sheet-foot">
+      <div class="tog" id="shortcutNever" role="button" tabindex="0" aria-pressed="false">
+        <span class="box">✓</span>Don't ask again
+      </div>
+      <div class="actions">
+        <button class="cancel" id="shortcutSkip">Not now</button>
+        <button class="go" id="shortcutAdd">Add shortcut</button>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+__JS__
+</script>
+</body></html>

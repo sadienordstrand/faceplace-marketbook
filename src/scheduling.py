@@ -4,13 +4,13 @@ scheduling.py
 -------------
 Saved searches that run themselves on a schedule and email you the results.
 
-    python3 scheduling.py --tick          # run whatever is due (what the OS calls)
-    python3 scheduling.py --list          # show saved searches and when they run
-    python3 scheduling.py --run NAME      # run one now, ignoring its schedule
-    python3 scheduling.py --install       # let the OS wake the machine and run ticks
-    python3 scheduling.py --uninstall
-    python3 scheduling.py --test-email
-    python3 scheduling.py --verify-probe URL
+    python3 src/scheduling.py --tick          # run whatever is due (what the OS calls)
+    python3 src/scheduling.py --list          # show saved searches and when they run
+    python3 src/scheduling.py --run NAME      # run one now, ignoring its schedule
+    python3 src/scheduling.py --install       # let the OS wake the machine and run ticks
+    python3 src/scheduling.py --uninstall
+    python3 src/scheduling.py --test-email
+    python3 src/scheduling.py --verify-probe URL
 
 Everything lives in one module on purpose: launchd and Task Scheduler need a
 single entry point to call, and the runner, the schedule arithmetic and the
@@ -38,12 +38,20 @@ from email.message import EmailMessage
 from email.utils import formatdate, make_msgid
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent
-SEARCHES_PATH = HERE / "saved_searches.json"
-EMAIL_CONFIG_PATH = HERE / "email_config.json"
-STATE_DIR = HERE / ".schedule"
-LOCK_PATH = STATE_DIR / "run.lock"
-TICK_LOG = STATE_DIR / "tick.log"
+import browser
+import descriptions
+import paths
+import storage
+
+# The project folder someone opens, which is not where this file lives — see the
+# note in paths.py. Anything user-facing about "this folder" means this one.
+ROOT = paths.ROOT
+# Rebound as module names because that's what the tests redirect.
+SEARCHES_PATH = paths.SEARCHES_PATH
+EMAIL_CONFIG_PATH = paths.EMAIL_CONFIG_PATH
+SCHEDULE_DIR = paths.SCHEDULE_DIR
+LOCK_PATH = SCHEDULE_DIR / "run.lock"
+TICK_LOG = SCHEDULE_DIR / "tick.log"
 
 
 def _support_dir():
@@ -102,18 +110,13 @@ SMTP_HOSTS = {
     "outlook": ("smtp-mail.outlook.com", 587),
     "icloud": ("smtp.mail.me.com", 587),
 }
-IMAP_HOSTS = {
-    "gmail": "imap.gmail.com",
-    "outlook": "outlook.office365.com",
-    "icloud": "imap.mail.me.com",
-}
 
 
 def log(msg):
     line = f"[{datetime.now():%Y-%m-%d %H:%M:%S}] {msg}"
     print(line, flush=True)
     try:
-        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        SCHEDULE_DIR.mkdir(parents=True, exist_ok=True)
         with open(TICK_LOG, "a", encoding="utf-8") as f:
             f.write(line + "\n")
     except OSError:
@@ -127,7 +130,7 @@ def check_in(event, **extra):
     identical to an agent that ran and found nothing due. The install checks for
     this, and so does the settings window."""
     payload = {"event": event, "at": f"{datetime.now():%Y-%m-%dT%H:%M:%S}",
-               "pid": os.getpid(), "python": sys.executable, "folder": str(HERE),
+               "pid": os.getpid(), "python": sys.executable, "folder": str(ROOT),
                **extra}
     try:
         SUPPORT_DIR.mkdir(parents=True, exist_ok=True)
@@ -434,10 +437,6 @@ DEFAULT_EMAIL_CONFIG = {
     "address": "",
     "app_password": "",
     "default_to": "",
-    # Turned on if a test send shows the provider filing our own mail under Sent
-    # instead of delivering it to the inbox, which Gmail does when the sender and
-    # the recipient are the same account.
-    "imap_append_inbox": False,
 }
 
 
@@ -453,13 +452,16 @@ def load_email_config():
 
 def save_email_config(cfg):
     merged = {**DEFAULT_EMAIL_CONFIG, **cfg}
-    EMAIL_CONFIG_PATH.write_text(json.dumps(merged, indent=2), encoding="utf-8")
+    # Temp file + replace so a crash mid-write can't leave the config corrupt.
     # An app password is full access to the mailbox, not just permission to
-    # send, so don't leave it group- or world-readable.
+    # send, so it's locked down before the file lands at its real name.
+    tmp = EMAIL_CONFIG_PATH.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(merged, indent=2), encoding="utf-8")
     try:
-        os.chmod(EMAIL_CONFIG_PATH, 0o600)
+        os.chmod(tmp, 0o600)
     except OSError:
         pass
+    tmp.replace(EMAIL_CONFIG_PATH)
     return merged
 
 
@@ -525,10 +527,6 @@ def smtp_target(cfg):
     return SMTP_HOSTS.get(cfg.get("provider") or "gmail", SMTP_HOSTS["gmail"])
 
 
-def imap_host(cfg):
-    return IMAP_HOSTS.get(cfg.get("provider") or "gmail", IMAP_HOSTS["gmail"])
-
-
 def send_email(cfg, to, subject, text_body, html_body=None, attachments=(),
                timeout=120):
     """attachments is a sequence of (filename, bytes, subtype)."""
@@ -560,35 +558,7 @@ def send_email(cfg, to, subject, text_body, html_body=None, attachments=(),
             s.starttls(context=ctx)
             s.login(cfg["address"], cfg["app_password"])
             s.send_message(msg)
-
-    if cfg.get("imap_append_inbox"):
-        imap_append_inbox(cfg, msg)
     return msg["Message-ID"]
-
-
-def imap_append_inbox(cfg, msg):
-    """Gmail dedupes on Message-ID, and it has already filed its own copy of
-    this message under Sent, so the delivered copy can be dropped before it
-    reaches the inbox. Putting it there directly makes delivery certain."""
-    import imaplib
-    try:
-        with imaplib.IMAP4_SSL(imap_host(cfg)) as m:
-            m.login(cfg["address"], cfg["app_password"])
-            m.append("INBOX", "", imaplib.Time2Internaldate(time.time()),
-                     msg.as_bytes())
-    except Exception as e:
-        log(f"  IMAP inbox copy failed ({e}); the message is still in Sent Mail.")
-
-
-def inbox_has_message(cfg, message_id, timeout=30):
-    """Proves a report actually reached the inbox rather than only Sent Mail,
-    which is the one thing a fake SMTP server cannot tell us about Gmail."""
-    import imaplib
-    with imaplib.IMAP4_SSL(imap_host(cfg)) as m:
-        m.login(cfg["address"], cfg["app_password"])
-        m.select("INBOX")
-        typ, data = m.search(None, "HEADER", "Message-ID", message_id)
-        return typ == "OK" and bool(data and data[0].split())
 
 
 # ---------- verifying that listings are still up ----------
@@ -933,7 +903,7 @@ class run_lock:
         self.fd = None
 
     def __enter__(self):
-        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        SCHEDULE_DIR.mkdir(parents=True, exist_ok=True)
         for attempt in (1, 2):
             try:
                 self.fd = os.open(LOCK_PATH, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
@@ -977,10 +947,14 @@ class run_lock:
                 os.close(self.fd)
             except OSError:
                 pass
-        try:
-            LOCK_PATH.unlink()
-        except OSError:
-            pass
+        # Only remove the lock if it's still ours. A run that outlived the
+        # stale threshold may have had its lock reclaimed and replaced by a
+        # newer run, and deleting that one would let a third run start.
+        if self._read_holder().get("pid") == os.getpid():
+            try:
+                LOCK_PATH.unlink()
+            except OSError:
+                pass
         return False
 
 
@@ -1261,15 +1235,18 @@ def archive_previous(run_dir):
             p.replace(hist / f"{Path(name).stem}-{n}.html")
 
 
-def run_saved_search(search, email_cfg=None, sweep=None, send=True, now=None):
+def run_saved_search(search, email_cfg=None, sweep=None, send=True, now=None,
+                     forced=False):
     """One scheduled run, start to finish. `sweep` is injectable so the tests can
-    exercise everything around the browser without opening one."""
+    exercise everything around the browser without opening one. `forced` means
+    someone asked for this run by hand, so being past the scheduled time is
+    expected and shouldn't be reported as the machine having been asleep."""
     import fb_marketplace_sweep as fb
 
     email_cfg = email_cfg if email_cfg is not None else load_email_config()
     to = (search.get("email_to") or "").strip() or email_cfg.get("default_to")
     started_at = now or now_local()
-    late = lateness_hours(search, started_at)
+    late = 0.0 if forced else lateness_hours(search, started_at)
     warnings = []
 
     searches = load_searches()
@@ -1278,23 +1255,23 @@ def run_saved_search(search, email_cfg=None, sweep=None, send=True, now=None):
     rec["next_run"] = iso(next_run_at(rec, started_at))
     save_searches(searches)
 
-    con = fb.open_db(fb.DB_PATH)
+    con = storage.open_db(storage.DB_PATH)
     try:
         prev_ids = previous_item_ids(con, search["id"])
         interval_hrs = interval_hours(search.get("interval") or {})
         stale = set(needs_verifying(con, prev_ids, interval_hrs))
-        prev_rows = rows_for_ids(con, prev_ids, fb.FIELDS)
+        prev_rows = rows_for_ids(con, prev_ids, storage.FIELDS)
         # Anything checked within the last interval is carried forward without
         # being probed again; only the rest is handed to the verifier.
         for r in prev_rows:
             r["_recheck"] = r["item_id"] in stale
 
-        run_dir = fb.saved_run_dir(search["name"])
+        run_dir = storage.saved_run_dir(search["name"])
         archive_previous(run_dir)
 
         def pause():
-            lo, hi = fb.PACES.get(search.get("pace") or "fast", (1.0, 2.5))
-            fb.human_pause(lo, hi)
+            lo, hi = descriptions.PACES.get(search.get("pace") or "fast", (1.0, 2.5))
+            browser.human_pause(lo, hi)
 
         verifier = make_verifier(
             con, pause,
@@ -1329,7 +1306,11 @@ def run_saved_search(search, email_cfg=None, sweep=None, send=True, now=None):
         if not summary or summary.get("status") != "ok":
             raise RuntimeError((summary or {}).get("error") or "the sweep failed")
 
-        mark_seen_in_feed(con, summary.get("total_ids") or [])
+        # feed_ids, not total_ids: totals include listings that were only
+        # carried forward from earlier runs. Stamping those "seen alive" would
+        # refresh their last_verified every run, so a listing that had actually
+        # sold would never come due for re-checking and never be dropped.
+        mark_seen_in_feed(con, summary.get("feed_ids") or [])
         mark_described(con, summary.get("described_ids") or [])
         record_run(con, search["id"], summary)
 
@@ -1421,7 +1402,8 @@ def tick(now=None, sweep=None, send=True, force=None):
                 to = (search.get("email_to") or "").strip() or email_cfg.get("default_to")
                 try:
                     results.append(run_saved_search(
-                        search, email_cfg, sweep=sweep, send=send, now=now))
+                        search, email_cfg, sweep=sweep, send=send, now=now,
+                        forced=bool(force)))
                 except SessionExpired as e:
                     # Every remaining search would fail at the same wall, so stop
                     # and send one email instead of one per search.
@@ -1453,10 +1435,10 @@ WIN_TASK = "FaceplaceMarketbook"
 def python_exe():
     """The venv interpreter, so a scheduled run gets the same Playwright the
     launcher installed rather than whatever system Python the OS hands us."""
-    for cand in (HERE / ".venv" / "bin" / "python3",
-                 HERE / ".venv" / "bin" / "python",
-                 HERE / ".venv" / "Scripts" / "pythonw.exe",
-                 HERE / ".venv" / "Scripts" / "python.exe"):
+    for cand in (paths.VENV_DIR / "bin" / "python3",
+                 paths.VENV_DIR / "bin" / "python",
+                 paths.VENV_DIR / "Scripts" / "pythonw.exe",
+                 paths.VENV_DIR / "Scripts" / "python.exe"):
         if cand.exists():
             return str(cand)
     return sys.executable
@@ -1476,10 +1458,10 @@ def mac_plist():
   <key>ProgramArguments</key>
   <array>
     <string>{python_exe()}</string>
-    <string>{HERE / 'scheduling.py'}</string>
+    <string>{paths.SCHEDULER_ENTRY}</string>
     <string>--tick</string>
   </array>
-  <key>WorkingDirectory</key><string>{HERE}</string>
+  <key>WorkingDirectory</key><string>{ROOT}</string>
   <key>StartInterval</key><integer>{TICK_SECONDS}</integer>
   <key>RunAtLoad</key><true/>
   <key>StandardOutPath</key><string>{AGENT_LOG}</string>
@@ -1506,12 +1488,14 @@ def earliest_next_run():
 
 
 def rearm_wake(quiet=True):
-    """launchd can't wake a sleeping Mac on its own, so the next due run gets its
-    own scheduled wake. Re-armed after every tick because the next time moves.
+    """Try to give the next due run its own one-off scheduled wake.
 
-    Needs administrator rights, which is why installing asks for your password.
-    If it isn't available the schedule still works, it just waits for the machine
-    to be awake."""
+    `pmset schedule` needs root, and this runs unattended (from a tick or a
+    button press), where nothing can show a password prompt — so `sudo -n`
+    only succeeds on a machine set up to allow pmset without a password.
+    Everywhere else this quietly does nothing, and the daily wake that
+    install_schedule sets (with a real password prompt) is what wakes the Mac.
+    Searches on hour intervals then run when the machine is next awake."""
     if os_name() != "darwin":
         return False
     nxt = earliest_next_run()
@@ -1522,7 +1506,7 @@ def rearm_wake(quiet=True):
     if when <= now_local():
         return False
     stamp = when.strftime("%m/%d/%y %H:%M:%S")
-    r = _run(["pmset", "schedule", "wake", stamp])
+    r = _run(["sudo", "-n", "pmset", "schedule", "wake", stamp])
     if r.returncode != 0:
         if not quiet:
             log(f"  couldn't schedule a wake ({r.stderr.strip() or 'permission denied'})")
@@ -1536,7 +1520,7 @@ def in_protected_folder(path=None):
     """Whether macOS will hide this folder from a background task."""
     if os_name() != "darwin":
         return None
-    parts = (path or HERE).parts
+    parts = (path or ROOT).parts
     home = Path.home().parts
     if parts[:len(home)] != home or len(parts) <= len(home):
         return None
@@ -1547,7 +1531,7 @@ def permission_help():
     """What to do about a Mac that started the scheduler and then denied it every
     file. Both fixes work; moving the folder needs no password."""
     folder = in_protected_folder()
-    suggestion = Path.home() / HERE.name
+    suggestion = Path.home() / ROOT.name
     lines = []
     if folder:
         lines.append(
@@ -1589,13 +1573,48 @@ def verify_agent_can_run(timeout=25):
     return False, None
 
 
+def _pmset_as_admin(args):
+    """Run a pmset command with root rights, prompting if needed.
+
+    pmset refuses everything but reads without root. `sudo -n` succeeds
+    instantly when credentials are already cached; otherwise osascript puts up
+    the standard macOS administrator-password dialog — the prompt the README
+    tells people to expect. Returns True on success."""
+    if _run(["sudo", "-n", "pmset"] + args).returncode == 0:
+        return True
+    cmd = " ".join(["pmset"] + args)
+    r = _run(["osascript", "-e",
+              f'do shell script "{cmd}" with administrator privileges'])
+    return r.returncode == 0
+
+
+def set_daily_wake():
+    """Set the repeating {DAILY_HOUR}am wake, and say what happened.
+
+    wakeorpoweron can even start a Mac that was shut down, as long as someone
+    unlocks it afterwards when FileVault is on."""
+    args = ["repeat", "wakeorpoweron", "MTWRFSU", f"{DAILY_HOUR:02d}:00:00"]
+    if _pmset_as_admin(args):
+        return (f"Your Mac will wake itself at {DAILY_HOUR}am for daily "
+                f"searches. Searches on hour intervals run whenever the Mac "
+                f"is next awake.")
+    return (f"Couldn't set the daily wake — the password prompt was cancelled "
+            f"or failed. Runs still happen, but only once the Mac is awake. "
+            f"To set the wake yourself, open Terminal and run:\n"
+            f"    sudo pmset repeat wakeorpoweron MTWRFSU "
+            f"{DAILY_HOUR:02d}:00:00")
+
+
 def install_schedule(daily_wake=True, verify=True):
     """Returns (ok, messages). Never raises: a half-installed schedule that
     explains itself is more useful than a traceback."""
     msgs = []
-    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    SCHEDULE_DIR.mkdir(parents=True, exist_ok=True)
     system = os_name()
     if system == "darwin":
+        # launchd opens AGENT_LOG before the agent process starts, so its
+        # folder has to exist now — check_in() creates it too late for that.
+        SUPPORT_DIR.mkdir(parents=True, exist_ok=True)
         p = plist_path()
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(mac_plist(), encoding="utf-8")
@@ -1617,25 +1636,13 @@ def install_schedule(daily_wake=True, verify=True):
         msgs.append(f"Scheduler installed; it checks for due searches every "
                     f"{TICK_SECONDS // 60} minutes.")
         if daily_wake:
-            # wakeorpoweron can even start a Mac that was shut down, as long as
-            # someone unlocks it afterwards when FileVault is on.
-            r = _run(["sudo", "-n", "pmset", "repeat", "wakeorpoweron",
-                      "MTWRFSU", f"{DAILY_HOUR:02d}:00:00"])
-            if r.returncode == 0:
-                msgs.append(f"Your Mac will wake itself at {DAILY_HOUR}am daily.")
-            else:
-                msgs.append(
-                    f"Couldn't set the daily wake without your administrator "
-                    f"password. Runs will still happen, but only once the Mac is "
-                    f"awake. To fix it, open Terminal and run:\n"
-                    f"    sudo pmset repeat wakeorpoweron MTWRFSU "
-                    f"{DAILY_HOUR:02d}:00:00")
+            msgs.append(set_daily_wake())
         rearm_wake(quiet=False)
         return True, msgs
 
     if system == "windows":
         xml = win_task_xml()
-        tmp = STATE_DIR / "task.xml"
+        tmp = SCHEDULE_DIR / "task.xml"
         # Task Scheduler insists on UTF-16 for imported XML.
         tmp.write_text(xml, encoding="utf-16")
         r = _run(["schtasks", "/create", "/tn", WIN_TASK, "/xml", str(tmp), "/f"])
@@ -1685,15 +1692,19 @@ def win_task_xml():
     <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
     <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
     <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
-    <ExecutionTimeLimit>PT4H</ExecutionTimeLimit>
+    <!-- Generous on purpose: the first run of a wide search with descriptions
+         is an overnight job, and Windows kills the process outright at this
+         limit - no report, no failure email. The stale-lock cleanup handles a
+         genuinely hung run. -->
+    <ExecutionTimeLimit>PT12H</ExecutionTimeLimit>
     <StartWhenAvailable>true</StartWhenAvailable>
     <Enabled>true</Enabled>
   </Settings>
   <Actions Context="Author">
     <Exec>
       <Command>{exe}</Command>
-      <Arguments>"{HERE / 'scheduling.py'}" --tick</Arguments>
-      <WorkingDirectory>{HERE}</WorkingDirectory>
+      <Arguments>"{paths.SCHEDULER_ENTRY}" --tick</Arguments>
+      <WorkingDirectory>{ROOT}</WorkingDirectory>
     </Exec>
   </Actions>
 </Task>
@@ -1707,9 +1718,12 @@ def uninstall_schedule():
         _run(["launchctl", "bootout", f"gui/{os.getuid()}/{MAC_LABEL}"])
         _run(["launchctl", "unload", str(plist_path())])
         plist_path().unlink(missing_ok=True)
-        _run(["sudo", "-n", "pmset", "repeat", "cancel"])
         msgs.append("Automatic runs are off. Your saved searches are untouched — "
                     "you can still run them by hand.")
+        if not _pmset_as_admin(["repeat", "cancel"]):
+            msgs.append("The daily 5am wake couldn't be removed without your "
+                        "password. It's harmless on its own; to remove it, open "
+                        "Terminal and run:\n    sudo pmset repeat cancel")
         return True, msgs
     if system == "windows":
         _run(["schtasks", "/delete", "/tn", WIN_TASK, "/f"])
@@ -1734,7 +1748,7 @@ def schedule_points_here():
     """Whether the installed schedule still refers to this copy of the project.
     Moving or renaming the folder leaves a task pointing at nothing."""
     system = os_name()
-    target = str(HERE / "scheduling.py")
+    target = str(paths.SCHEDULER_ENTRY)
     if system == "darwin":
         try:
             return target in plist_path().read_text(encoding="utf-8")
@@ -1760,6 +1774,11 @@ def schedule_problems():
         return permission_help()
     when = parse_iso(beat.get("at"))
     if when and now_local() - when > timedelta(seconds=TICK_SECONDS * 3):
+        # A sweep can run for hours, and no new tick starts while one is going,
+        # so an old heartbeat during a live run is normal, not a problem.
+        holder = run_lock._read_holder()
+        if holder and _pid_alive(int(holder.get("pid") or 0)):
+            return []
         return [f"The scheduler last checked in {fmt_when(when)}, which is longer "
                 f"ago than the {TICK_SECONDS // 60} minutes it should be. If this "
                 f"computer has been awake since then, turn automatic runs off and "
@@ -1782,8 +1801,7 @@ def searches_for_ui():
     searches = load_searches()
     tracking = {}
     try:
-        import fb_marketplace_sweep as fb
-        con = fb.open_db(fb.DB_PATH)
+        con = storage.open_db(storage.DB_PATH)
         try:
             for s in searches:
                 row = latest_run(con, s.get("id"))
@@ -1894,24 +1912,16 @@ def ui_hooks():
             return {"error": "Add your address and app password first, then Save."}
         to = cfg.get("default_to") or cfg["address"]
         try:
-            mid = send_email(cfg, to, "Faceplace Marketbook: test message",
-                             "If you're reading this, scheduled reports will "
-                             "reach you.")
+            send_email(cfg, to, "Faceplace Marketbook: test message",
+                       "If you're reading this, scheduled reports will "
+                       "reach you.")
         except Exception as e:
             return {"error": f"Couldn't send it: {_smtp_hint(e, cfg)}"}
         note = f"Sent to {to}."
         if _self_send(cfg, to):
-            try:
-                if inbox_has_message(cfg, mid):
-                    note += " It's in your inbox."
-                else:
-                    save_email_config({**cfg, "imap_append_inbox": True})
-                    note += (" It only reached Sent Mail, which is what Gmail does "
-                             "with mail you send yourself, so future reports will "
-                             "be placed in your inbox directly.")
-            except Exception as e:
-                note += (f" Couldn't check which folder it landed in ({e}). If it "
-                         f"isn't in your inbox, look in Sent Mail.")
+            note += (" One Gmail quirk: mail you send to yourself is sometimes "
+                     "filed under Sent Mail instead of the inbox, so look there "
+                     "too. Sending reports to a different address avoids it.")
         return {"message": note}
 
     def state():
@@ -1958,8 +1968,8 @@ def ui_hooks():
 
 
 def _self_send(cfg, to):
-    """Gmail files mail you send to yourself under Sent instead of delivering it,
-    so that case needs checking. Handles you+tag@gmail.com too."""
+    """Gmail sometimes files mail you send to yourself under Sent instead of
+    delivering it, so that case earns a heads-up. Handles you+tag@gmail.com."""
     if (cfg.get("provider") or "gmail") != "gmail":
         return False
     def norm(a):
@@ -2009,36 +2019,25 @@ def cmd_test_email():
         raise SystemExit("Email isn't set up. Add your address and app password "
                          "in the settings window first.")
     to = cfg.get("default_to") or cfg["address"]
-    mid = send_email(cfg, to, "Faceplace Marketbook: test message",
-                     "If you're reading this, scheduled reports will reach you.\n\n"
-                     "Sent by Faceplace Marketbook's email test.")
+    send_email(cfg, to, "Faceplace Marketbook: test message",
+               "If you're reading this, scheduled reports will reach you.\n\n"
+               "Sent by Faceplace Marketbook's email test.")
     print(f"Sent to {to}.")
-    if cfg.get("provider", "gmail") == "gmail" and to.split("+")[0] == cfg["address"]:
+    if _self_send(cfg, to):
         print("Because you're sending to the same Gmail account you're sending\n"
-              "from, the copy may be filed under Sent Mail instead of your inbox.\n"
-              "Checking where it landed...")
-        try:
-            if inbox_has_message(cfg, mid):
-                print("  It's in your inbox.")
-            else:
-                cfg["imap_append_inbox"] = True
-                save_email_config(cfg)
-                print("  It only reached Sent Mail, so future reports will be "
-                      "placed in your inbox directly.")
-        except Exception as e:
-            print(f"  Couldn't check the inbox ({e}). Look in Sent Mail if it's "
-                  f"not in your inbox.")
+              "from, the copy may be filed under Sent Mail instead of your\n"
+              "inbox, so look there too. Sending reports to a different address\n"
+              "avoids that.")
 
 
 def cmd_verify_probe(urls):
     """Calibration tool: classify real listing URLs and show the marker that
     decided each one, so the rules above can be checked against reality."""
-    import fb_marketplace_sweep as fb
     from playwright.sync_api import sync_playwright
     with sync_playwright() as p:
-        ctx = fb.launch_context(p)
+        ctx = browser.launch_context(p)
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
-        fb.ensure_logged_in(page, timeout_s=120)
+        browser.ensure_logged_in(page, timeout_s=120)
         for url in urls:
             status, marker = probe_listing(ctx, url)
             tier = "1"
@@ -2046,7 +2045,7 @@ def cmd_verify_probe(urls):
                 status, marker = probe_listing_rendered(page, url)
                 tier = "2"
             print(f"{status:8} tier{tier}  {marker[:70]:70} {url}")
-            fb.human_pause(1.5, 3.0)
+            browser.human_pause(1.5, 3.0)
         ctx.close()
 
 

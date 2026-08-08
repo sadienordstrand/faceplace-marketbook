@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 320 320" fill="none" shape-rendering="geometricPrecision"><defs><linearGradient id="bg" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="320" y2="320"><stop offset="0" stop-color="#434A31"></stop><stop offset="1" stop-color="#2E331A"></stop></linearGradient><linearGradient id="og" gradientUnits="userSpaceOnUse" x1="60" y1="40" x2="270" y2="270"><stop offset="0" stop-color="#F4AE8C"></stop><stop offset="1" stop-color="#E17E52"></stop></linearGradient></defs>
+  <rect width="320" height="320" rx="72" fill="#373D1F"></rect>
+  <g stroke="url(#og)" stroke-width="19.5" stroke-linecap="round" stroke-linejoin="round" transform="translate(160 163) scale(0.92) translate(-160 -163)">
+              <path d="M74 146 L86 106 C88 94 96 88 108 88 H212 C224 88 232 94 234 106 L246 146"></path>
+              <path d="M74 146 q21 15 43 0 q21 15 43 0 q21 15 43 0 q21 15 43 0"></path>
+              <path d="M92 158 V238 H228 V158"></path>
+              <path d="M138 238 V196 a12 12 0 0 1 12 -12 h20 a12 12 0 0 1 12 12 V238"></path>
+            </g>
+            <g stroke="url(#bg)" stroke-linecap="round" fill="none">
+              <line x1="261" y1="127" x2="287" y2="153" stroke-width="22"></line>
+              <circle cx="232" cy="98" r="36" stroke-width="20"></circle>
+            </g>
+            <g stroke="url(#og)" fill="none">
+              <rect x="259" y="118.5" width="36" height="13" rx="3.5" fill="url(#og)" stroke="none" transform="rotate(45 259 125)"></rect>
+              <circle cx="232" cy="98" r="36" stroke-width="11"></circle>
+            </g>
+</svg>

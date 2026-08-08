@@ -49,6 +49,8 @@ if errorlevel 1 (
     "%VPY%" -m pip install --quiet -r requirements.txt
     if errorlevel 1 goto pip_failed
     copy /y requirements.txt ".venv\.installed" >nul
+    rem A new Playwright pins a new Chromium build, so re-check the browser too.
+    if exist ".venv\.browser-installed" del ".venv\.browser-installed"
 )
 
 rem --- 4. Download the browser Playwright drives ------------------------------
@@ -60,7 +62,7 @@ if not exist ".venv\.browser-installed" (
 )
 
 rem --- 5. Go -----------------------------------------------------------------
-"%VPY%" fb_marketplace_sweep.py %*
+"%VPY%" "src\fb_marketplace_sweep.py" %*
 set "STATUS=%ERRORLEVEL%"
 
 echo.

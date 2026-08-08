@@ -1,0 +1,10 @@
+/* The palette and the two typefaces that the settings window and the gallery are
+   both built from.*/
+:root {
+  --olive: #373D1F; --olive-dk: #262B14; --olive-lt: #5C6537;
+  --accent: #ED926B; --accent-soft: #F0AC8E;
+  --bg: #16180F; --card: #212418; --card-hi: #2A2E20;
+  --ink: #EDE3CE; --ink-soft: #A79E85; --rule: #3A3F2B;
+  --body: "Lato", -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+  --type: "Courier Prime", "American Typewriter", "Courier New", monospace;
+}

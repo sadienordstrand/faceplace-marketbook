@@ -66,6 +66,8 @@ if ! cmp -s requirements.txt .venv/.installed; then
     "$VPY" -m pip install --quiet -r requirements.txt ||
         stop "Install failed. Check your internet connection and try again."
     cp requirements.txt .venv/.installed
+    # A new Playwright pins a new Chromium build, so re-check the browser too.
+    rm -f .venv/.browser-installed
 fi
 
 # --- 4. Download the browser Playwright drives -------------------------------
@@ -79,7 +81,7 @@ fi
 # --- 5. Go ------------------------------------------------------------------
 # PYTHONUTF8 keeps accented characters in listing titles from tripping up
 # output on any machine, whatever its regional settings.
-PYTHONUTF8=1 "$VPY" fb_marketplace_sweep.py "$@"
+PYTHONUTF8=1 "$VPY" src/fb_marketplace_sweep.py "$@"
 status=$?
 
 say ""
