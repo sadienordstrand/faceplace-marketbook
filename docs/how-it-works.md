@@ -9,8 +9,8 @@ The only things at the top are the four files meant to be double-clicked, the
 README, and folders:
 
 ```
-Start Faceplace (Mac).command      Log into Facebook (Mac).command
-Start Faceplace (Windows).bat      Log into Facebook (Windows).bat
+Start Faceplace Marketbook (Mac).command      Log into Facebook (Mac).command
+Start Faceplace Marketbook (Windows).bat      Log into Facebook (Windows).bat
 README.md      requirements.txt
 src/     tests/     docs/     runs/
 hidden:  .state/   .venv/   .gitignore   .gitattributes
@@ -134,7 +134,8 @@ due search in creation order, under one lock), `--list`, `--run NAME`,
    the description and full-size photo, writing each to the database the moment
    it's done, so Ctrl-C stops the work without discarding it.
 3. **Thumbnails** — save every image locally, reusing anything already on disk.
-4. **Gallery** — write `gallery.html` and open it in a browser.
+4. **Gallery** — write `gallery.html` and `lightweight_gallery.html`, and open
+   the first in a browser.
 
 Results from every city are merged by listing id *before* the description and
 thumbnail stages, so overlapping city radii never cause duplicate work.
@@ -239,6 +240,12 @@ thumbnails baked in as data URIs, so it needs no `thumbnails/` folder, no server
 and no live Facebook URLs. `--no-embed` links them by path instead and keeps the
 file small (a few hundred KB rather than ~10 MB per 150 listings), but then it
 only works from its original folder.
+
+A run writes both: `gallery.html` embedded, and `lightweight_gallery.html` with
+`--no-embed`, from the same CSV in the same folder. The `image` column already
+holds `thumbnails/<item_id>.jpg` for anything downloaded, so the unembedded
+build is the CSV's own paths passed straight through, and the two files stay in
+step because they're generated together.
 
 **Year sorting** reads the model year out of the title, since that's where
 vehicle sellers put it and no listing field carries it. The first `19xx`/`20xx`

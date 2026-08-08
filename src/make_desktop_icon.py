@@ -3,8 +3,8 @@
 Puts a double-clickable Faceplace Marketbook icon where the user asks for it:
 the desktop, the Dock on a Mac, or the Start menu on Windows.
 
-    "Start Faceplace (Mac).command" --desktop-icon
-    "Start Faceplace (Windows).bat" --desktop-icon
+    "Start Faceplace Marketbook (Mac).command" --desktop-icon
+    "Start Faceplace Marketbook (Windows).bat" --desktop-icon
 
 is the command-line way in. Ordinarily this is reached from the settings window,
 which offers a shortcut on a first launch and has a button for one thereafter,
@@ -320,7 +320,7 @@ def offer(force=False):
     return {
         "ask": True,
         "why": f"You start {APP_NAME} by opening its folder and double-clicking "
-               f"Start Faceplace. Want something quicker to reach?",
+               f"Start Faceplace Marketbook. Want something quicker to reach?",
         "places": [{"id": p,
                     "label": PLACE_LABELS[p] + ("" if p not in taken
                                                 else " — there's one here already"),
@@ -414,7 +414,7 @@ def add_to_dock(app):
 
 
 def add_mac(place_ids):
-    launcher = launcher_path("Start Faceplace (Mac).command")
+    launcher = launcher_path("Start Faceplace Marketbook (Mac).command")
     launcher.chmod(launcher.stat().st_mode | 0o111)
     pngs = render(on_mac_grid, MAC_SIZES)
     made, trouble = {}, []
@@ -436,7 +436,7 @@ def add_mac(place_ids):
 
 
 def add_windows(place_ids):
-    launcher = launcher_path("Start Faceplace (Windows).bat")
+    launcher = launcher_path("Start Faceplace Marketbook (Windows).bat")
     pngs = render(full_bleed, WINDOWS_SIZES)
     # The shortcuts point at this file rather than carrying a copy of the
     # picture, so it has to live somewhere permanent. It's generated, so it goes

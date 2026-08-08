@@ -1,38 +1,31 @@
 # Faceplace Marketbook
 
-Searches Facebook Marketplace across the whole country for something you're
-hunting for, then turns the results into a catalogue you can flip through.
+Facebook Marketplace's built-in search only covers one city at a time, and pads the results with loosely related junk.
 
-Facebook's own search only covers one city at a time and pads the results with
-loosely related junk. This searches twelve cities that between them cover the
-continental US, throws out the things that don't match, collects each listing's
-photo and description, and builds a single web page you can search, sort, and
-prune.
-
-You can also [save a search and set it up to run automatically](#automated-searches)
-on a schedule, and have it email you what's new — and what sold — since last time.
+**This tool:**
+- Searches as many cities as you like (the default is twelve cities that between them cover the continental US)
+- Throws out the things that don't match, so you don't have to sift through endless junk
+- Collects each listing's photo and description, and builds a catalogue you can search, sort, and prune
+- If desired, will automatically run scheduled searches and email you what's new — and what sold — since last time.
 
 Works on Windows and Mac.
 
 ## Contents
 
-- [**Results**](#results) — what a finished search looks like
-- [**Please read this first**](#please-read-this-first) — this tool uses your real
-  Facebook account
-- [**Setting it up**](#setting-it-up) — about ten minutes, once
+- [**Please read this first**](#please-read-this-first)
+- [**Overview**](#overview)
+- [**Setting it up**](#setting-it-up)
   - [Step 1 — Get the folder onto your computer](#step-1--get-the-folder-onto-your-computer)
   - [Step 2 — Start it](#step-2--start-it)
   - [Step 3 — Log into Facebook](#step-3--log-into-facebook)
   - [Step 4 — Set your search radius](#step-4--set-your-search-radius)
-  - [Step 5 — Put it on your desktop, if you like](#step-5--put-it-on-your-desktop-if-you-like)
-- [**Running a search**](#running-a-search) — the settings window, and how to get
-  cleaner results
+  - [Step 5 — Add a shortcut on your computer, if you like](#step-5--add-a-shortcut-on-your-computer-if-you-like)
+- [**Running a search**](#running-a-search)
   - [Getting better results](#getting-better-results)
   - [Adding your own cities](#adding-your-own-cities)
-- [**While it runs**](#while-it-runs) — what to expect, and what not to touch
-- [**Your results**](#your-results) — the gallery and the files beside it
-- [**Automated searches**](#automated-searches) — run on a schedule and get
-  emailed what's new
+- [**While it runs**](#while-it-runs)
+- [**Your results**](#your-results)
+- [**Automated searches**](#automated-searches)
   - [On a Mac, check where this folder lives first](#on-a-mac-check-where-this-folder-lives-first)
   - [Part 1 — Give the app an email password](#part-1--give-the-app-an-email-password)
   - [Part 2 — Save a search](#part-2--save-a-search)
@@ -40,29 +33,38 @@ Works on Windows and Mac.
   - [What the emails look like](#what-the-emails-look-like)
   - [Where scheduled results live](#where-scheduled-results-live)
   - [Turning it off](#turning-it-off)
-- [**When something goes wrong**](#when-something-goes-wrong) — the usual
-  problems, and what to do
-- [**For the technically inclined**](#for-the-technically-inclined) — how it
-  works inside
+- [**Troubleshooting**](#troubleshooting)
+- [**For the technically inclined**](#for-the-technically-inclined)
 
 ---
 
-## Results
+## Please read this first
 
-Every run builds a gallery like this one, saved on your own computer. You can
-search it, sort it by price or year, filter by city, and throw out anything you
+**Automating Facebook is against their Terms of Service.** This tool runs on your own
+real Facebook account, using your own login. There is a chance that Facebook may restrict or ban your account for bot activity. By using this tool, you acknowledge and accept this risk.
+
+**Things to keep in mind:**
+- **Keep runs occasional.** Running a search once a day is less risky than once every hour.
+- **You log in by hand.** The first time you run a search, a browser window opens and you type your own password
+  and two-factor code into Facebook, exactly as you normally would. Your
+  password is never seen or stored by this app. Only the resulting browser
+  session is saved on your computer, in a hidden folder called `.state`, so you
+  don't have to log in every time.
+- **Facebook changes their website constantly.** When they do, searches may
+  start coming back empty or with missing prices. That's expected wear, not
+  something you broke.
+
+---
+
+## Overview
+
+Every run builds a gallery like this, saved on your own computer. You can
+search it, sort by price or year, filter by city, and throw out anything you
 don't want to see again.
 
 ![The gallery a run produces](docs/images/gallery.jpg)
 
-Each listing keeps its photo, price, location, mileage where the seller gave one,
-and the opening lines of the description, with a link straight to the listing on
-Facebook.
-
-<img src="docs/images/gallery-card.jpg" alt="A single listing card" width="300">
-
-Searches are set up in a window like this. Every setting has
-an explanation underneath it.
+This is the search setup window.
 
 ![The search setup window](docs/images/settings-search.png)
 
@@ -78,58 +80,65 @@ has sold or been taken down since last time.
 
 ---
 
-## Please read this first
-
-**Automating Facebook is against their Terms of Service.** This runs on your own
-real Facebook account, using your own login. There's no trickery here to hide
-that — deliberately. The practical consequences:
-
-- **Keep runs occasional.** A search every few days is very different from one
-  every hour. Facebook can restrict or disable accounts for automated activity,
-  and it would be your account.
-- **Collecting descriptions is the heavy part.** It opens one page per listing,
-  which is far more activity than the search itself. If you're at all worried,
-  set the pace to "Slow" and use the Limit box.
-- **You log in by hand.** A browser window opens and you type your own password
-  and two-factor code into Facebook, exactly as you normally would. Your
-  password is never seen or stored by this app. Only the resulting browser
-  session is saved on your computer, in a hidden folder called `.state`, so you
-  don't have to log in every time.
-- **Facebook changes their website constantly.** When they do, searches may
-  start coming back empty or with missing prices. That's expected wear, not
-  something you broke.
-
----
-
 ## Setting it up
 
-You only do this once. Budget about ten minutes, most of it waiting for
-downloads.
+You only have to do this once, and it will take about 10 minutes.
 
 ### Step 1 — Get the folder onto your computer
 
 On the project's GitHub page, click the green **Code** button, then **Download
 ZIP**. Open the downloaded ZIP to unpack it, and move the resulting folder
-somewhere you'll find it again.
+somewhere you'll find it again, like Documents or Desktop. (If you're on a Mac and later decide to set up [automated searches](#automated-searches), you may need to change the folder location, as explained in that section.)
 
 Keep everything in that folder together. The app stores your searches and
-results inside it. Anywhere you'll find it again is fine — Documents works, so
-does the desktop. (If you later set up [automated searches](#automated-searches)
-on a Mac, there's one folder location that needs changing, and that section says
-so when you get there.)
+results inside it.
 
 ### Step 2 — Start it
 
 Open the folder and double-click the file for your computer:
 
-- **Windows:** `Start Faceplace (Windows).bat`
-- **Mac:** `Start Faceplace (Mac).command`
+- **Windows:** `Start Faceplace Marketbook (Windows).bat`
+- **Mac:** `Start Faceplace Marketbook (Mac).command`
 
-A terminal window opens and tells you what it's doing. One of two things happens
+<details>
+<summary><strong>If Windows won't open it — "Windows protected your PC"</strong></summary>
+
+Click **More info**, then **Run anyway**. Windows shows that box for anything it
+downloaded from outside the Microsoft Store.
+
+</details>
+<details>
+<summary><strong>If your Mac won't open it — "Apple could not verify ..."</strong></summary>
+
+The button you need is in Settings:
+
+1. Open **System Settings** → **Privacy & Security**.
+2. Scroll down to the **Security** section. You'll see a line saying
+   `"Start Faceplace Marketbook (Mac).command" was blocked to protect your Mac`,
+   with an **Open Anyway** button next to it. Click it.
+3. Confirm with your password or Touch ID, and click **Open Anyway** again if
+   asked.
+
+**Or run it from Terminal,** which always works and skips Apple's permission
+entirely:
+
+1. Press Command-Space, type `Terminal`, and press Return.
+2. Drag `Start Faceplace Marketbook (Mac).command` from your folder into the
+   Terminal window. It fills in the location for you.
+3. Press Return.
+
+If that says `permission denied`, unzipping stripped the file's permission to
+run. Type `chmod +x` and a space, drag the file in again, press Return, and then
+repeat the steps above.
+
+</details>
+<br>
+
+Once you launch the program, a terminal window opens and tells you what it's doing. One of two things happens
 next.
 
 **If you already have Python,** it spends a couple of minutes installing what it
-needs and downloading the Chromium browser for itself, about 150 MB, then opens
+needs and downloading the Chromium browser for itself (about 150 MB) then opens
 the search window. Every time after that, it'll start up in a second or two.
 
 **If you don't have Python,** it says so and shows you where to get it.
@@ -137,8 +146,7 @@ Install it using the instructions below, then double-click the Start file
 again.
 
 Everything else it installs goes in a `.venv` folder inside the app's folder.
-Nothing is changed anywhere else on your computer, and deleting the app's folder
-removes all of it.
+Nothing is changed anywhere else on your computer.
 
 <details>
 <summary><strong>Installing Python, if it asks you to</strong></summary>
@@ -160,39 +168,6 @@ and some confusion about which is in charge.
 
 </details>
 
-<details>
-<summary><strong>If your computer won't open the Start file</strong></summary>
-
-Both systems block programs that aren't from an identified company, and this one
-isn't.
-
-**Windows** shows a blue "Windows protected your PC" box. Click **More info**,
-then **Run anyway**.
-
-**Mac** shows *"Apple could not verify ... is free of malware"*.
-The button you need is in Settings:
-
-1. Open **System Settings** → **Privacy & Security**.
-2. Scroll down to the **Security** section. You'll see a line saying
-   `"Start Faceplace (Mac).command" was blocked to protect your Mac`, with an
-   **Open Anyway** button next to it. Click it.
-3. Confirm with your password or Touch ID, and click **Open Anyway** again if
-   asked.
-
-**Mac, alternative that always works:** you can run it from Terminal instead and
-skip Apple's permission entirely.
-
-1. Press Command-Space, type `Terminal`, and press Return.
-2. Drag `Start Faceplace (Mac).command` from your folder into the Terminal
-   window. It fills in the location for you.
-3. Press Return.
-
-If that says `permission denied`, unzipping stripped the file's permission to
-run. Type `chmod +x` and a space, drag the file in again, press Return, and then
-repeat the steps above.
-
-</details>
-
 ### Step 3 — Log into Facebook
 
 The first run opens a Facebook window and waits. Log in as you normally would,
@@ -202,53 +177,44 @@ and carries on by itself.
 It remembers the session, so you shouldn't have to do this again for a long
 while — usually a few weeks, until Facebook expires it.
 
-**When it does expire, log in through the app, not your normal browser.** The app
-keeps its own private browser login, separate from Safari, Chrome and Edge, so
-signing into Facebook the usual way has no effect on it. You have two ways to
-renew it, and neither needs the command line:
-
-- Double-click **Log into Facebook** (`Log into Facebook (Mac).command` or
+**When it does expire:** 
+- Double-click the **Log into Facebook** file (`Log into Facebook (Mac).command` or
   `Log into Facebook (Windows).bat`). A Facebook window opens, you log in, and it
-  saves the session and closes. Nothing gets searched. This is the one to use
-  when a scheduled run emails you saying the login expired.
-- Or just start a search as usual. If the login has expired you'll be asked for it
-  before the sweep begins, exactly as you were the first time.
+  saves the session and closes.
+- Or just start a search as usual. If the login has expired, you'll be asked for it
+  before the sweep begins.
 
 ### Step 4 — Set your search radius
 
 Once you're logged in, the app loads Marketplace and then **stops and waits for
 you** before searching anything.
 
-In the browser window, click the location control in the left sidebar and
-set the distance to **500 miles**. While you're in there, dismiss any Facebook
-notification popups. Then come back to the terminal and press **Enter**.
+In the browser window, click the location button in the left sidebar and set the radius you want to search around each city. Facebook starts new accounts at 250 miles and allows up to 500.
+**500 miles** is the setting the twelve built-in cities are spaced for, so choose
+that if you want them to cover the whole country; a shorter
+radius is fine if you only care about listings near the cities you picked.
 
-### Step 5 — Put it on your desktop, if you like
+While you're in there, dismiss any Facebook notification popups. Then come back
+to the terminal and press **Enter**.
 
-The Search Setup window offers this by itself the first time it opens, with a
+### Step 5 — Add a shortcut on your computer, if you like
+
+The Search Setup window offers this the first time it opens, with a
 small panel headed **Add a shortcut?** Tick where you want it and click **Add
 shortcut**:
 
 - **Desktop** — an icon called **Faceplace Marketbook** that you double-click to
   start a search, exactly as the Start file does.
 - **Dock** (Mac) — keeps it in the Dock permanently. It also puts the app in your
-  own Applications folder, which is what the Dock points at, and the Dock blinks
-  as it restarts.
-- **Start menu** (Windows) — nothing on screen, but typing "Faceplace" finds it.
-
-If you'd rather not, click **Not now** and it'll ask again next time. Tick
-**Don't ask again** first and it won't. Either way it stops asking once you have
-a shortcut, and it never asks on a computer that already has one.
+  own Applications folder.
+- **Start menu** (Windows) — nothing on screen, but typing "faceplace" finds it.
 
 You can also do it whenever you like, without waiting to be asked. In the Search
 Setup window, open the **Email & schedule** tab and click **Add a shortcut…**.
-That works even if you ticked **Don't ask again**, and even if you already have
-one somewhere and want a second.
 
-A shortcut is the only thing any of this puts outside the app's folder. Dragging
-it to the Trash (or deleting it, on Windows) removes it and nothing else.
+A shortcut is the only thing any of this puts outside the app's folder. Deleting the shortcut will not delete the app itself.
 
-If you move the app's folder later, the icon will still be pointing at where the
+If you move the app's folder later, the shortcut will still be pointing at where the
 folder used to be. Click **Add a shortcut…** again from its new home and you'll
 get one that works.
 
@@ -265,9 +231,9 @@ explanation underneath it in the window itself; this is just a brief overview:
 
 - **Query** — what you're looking for, e.g. `land rover defender 110`. More
   words narrows the results.
-- **Cities** — each selected city searches a 500-mile radius around itself.
-  Select all of them to cover the continental US. You can add your own cities
-  too; see below.
+- **Cities** — each selected city searches out to your account's radius around
+  itself, up to 500 miles. Select all of them, at 500 miles, to cover the
+  continental US. You can add your own cities too; see below.
 - **Price range** and **Exclude terms** — the two most effective ways to cut
   junk. See below.
 - **Stages** — whether to collect descriptions, download photos, and build the
@@ -282,21 +248,14 @@ can see the cost of your choices before committing.
 
 Facebook search is a suggestion, not a filter. It pads results heavily: in one
 measured search, **85% of what came back didn't have the search term in the
-title at all.** Two settings do most of the work of cleaning that up:
+title at all.** Two settings help clean that up:
 
-**Exclude terms** is the strongest one, especially when your search term is also
-some other product's name. Searching "defender 110" returns thousands of Can-Am
-UTVs, whose model names are things like HD10. Adding `can am, hd10, hot wheels`
-cut one real search from 4,698 listings to 1,925. Punctuation and spacing are
+**Exclude terms**: If you're looking for a certain car, you might put "hot wheels" and "lego" in the excluded terms to avoid cluttering your search results with toys that share the name of that car. Punctuation and spacing are
 ignored, so `can am` also catches "Can-Am" and "CANAM".
 
-**A minimum price** can also narrow the results considerably: it took that same
-search from 1,925 listings down to 811. Listings with no price shown are kept
-either way.
+**A minimum/maximum price** can also narrow the results considerably.
 
-**Leave "Exact matching" off.** When testing with and without "Exact matching"
-on the same city, turning it on found nothing the normal search missed, and it
-threw away 34 genuine matches.
+**Leave "Exact matching" off.** It has a tendency to exclude some legitimate results, and doesn't provide much benefit besides making your search a bit faster.
 
 ### Adding your own cities
 
@@ -313,31 +272,12 @@ address. To get it:
 3. Copy the whole web address from the address bar.
 
 Paste that into the box at the bottom of the **Cities** section, give it a name
-(like "City, ST") and click **Add city**. The app pulls out the part it needs and
-tells you if the link isn't one it can use. Cities you add are saved and will be
-there next time. To get rid of one, hover over it and click the **✕**, then click
-again to confirm.
+(like "City, ST") and click **Add city**. Cities you add are saved and will be
+there next time. To get rid of one, hover over it and click the **✕**.
 
-**Only cities you added yourself can be removed.** The twelve that come with the
-app are permanent, because their spacing is what makes nationwide coverage work
-and removing one leaves a hole nothing would show you afterwards. To leave one
-out of a search, untick it — that has exactly the effect you want and it's not
-permanent.
-
-Your cities are kept in their own file, `.state/my_locations.json`, separate from
-the twelve in `src/locations.json`. Nothing you do in the window ever changes
-that second file, so an update to the app can't lose your cities and adding one
-can't damage the built-in list.
-
-**If the address you paste isn't really a city, you won't find out until a run.**
-The app checks that the link has a city in it, but it can't tell a real city from
-a plausible-looking one — only Facebook knows that. Paste something Facebook
-doesn't recognise and it quietly answers with results for *whatever city your
-Facebook account is currently set to*, which would file another city's listings
-under your new name. So the app watches for that during the run: if it happens,
-the city is skipped, the terminal says which city Facebook substituted, and a
-scheduled run puts a warning at the top of its email. Remove the bad entry and
-add it again from a real Marketplace address.
+**If the address you paste isn't valid, you won't find out until a run.**
+Invalid cities will be skipped, and if it's a scheduled search,
+the email report will have a warning at the top. Remove the bad entry and add it again with the correct link.
 
 ---
 
@@ -347,27 +287,26 @@ The terminal window narrates as it goes: which city it's on, how many listings
 it's found, and how many survived filtering. It's meant to be readable — if it
 looks stuck, check the last line.
 
-**Don't touch the browser window it opens.** The app is driving that window —
-scrolling it, reading it, and moving between pages. Clicking, scrolling, typing,
+**Don't touch the browser window it opens.** The app is driving that window. Clicking, scrolling, typing,
 or opening a listing in it will fight the app for control, and at worst it loses
-the city it was working on. Leave it alone and let it work. You can use your
+the city it was working on. You can use your
 computer normally otherwise, including your own separate browser — just leave
 that one window be.
 
 Collecting descriptions is the slow part, roughly 7 seconds per listing, because
 each one is a separate page visit and the app deliberately pauses between them
-to avoid getting flagged for suspicious bot activity. A few thousand listings is
+to avoid getting flagged for suspicious bot activity. A few thousand listings might be
 an overnight job. The estimate is printed before that stage starts.
 
 **Sleep is handled for you.** A long run would normally be cut short by the
 computer going to sleep, so the app asks your system to stay awake while it
-works, and releases that as soon as it's done. It says so in the terminal.
+works, and releases that as soon as it's done.
 One thing it can't override: **closing a laptop lid still puts the machine to
-sleep.** For an overnight run, leave the lid open and leave it plugged in.
+sleep, unless there are external displays connected.** For an overnight run, leave the lid open and leave it plugged in.
 
 **You can stop it early.** Press `Control-C` in the terminal while it's
 collecting descriptions and it stops, keeps everything gathered so far, and goes
-straight to building your gallery.
+straight to building your gallery. (Pressing `Control-C` during any other stage of the process may terminate the search entirely, so use with caution.)
 
 ---
 
@@ -377,11 +316,13 @@ When it finishes, your gallery opens in your browser automatically.
 
 Everything from the run lands in a new folder inside `runs/`, named for your
 search and the date, like `runs/my_search_08-05-2026/`. Run the same search
-twice in a day and the second becomes `..._1`. Nothing is ever overwritten. In
+twice in a day and the second becomes `..._1`. In
 each folder:
 
-- **`gallery.html`** — the page that opened. The photos are baked into this one
-  file, so you can move it, keep it, or email it and it still works.
+- **`gallery.html`** — the browsable catalogue. The photos are baked into this one
+  file, so you can move it anywhere and it still works.
+- **`lightweight_gallery.html`** — the same catalogue, but it reads the photos out
+  of the `thumbnails/` folder instead of carrying them. Better for emailing/sharing, but the images won't be visible without the thumbnails folder alongside it.
 - **`results.csv`** — the same listings as a spreadsheet, for Excel or Numbers.
 - **`run.json`** — a record of what was searched and what came back.
 - **`thumbnails/`** — the photos as individual files.
@@ -391,10 +332,7 @@ any card for the full description. The **✕** in a card's corner hides listings
 you're not interested in; the app remembers what you've hidden even after you
 close and reopen the page.
 
-The sort menu offers price, title, and **year**. Year is read out of the
-listing's title, which is where vehicle sellers put it — "1995 Land Rover
-Defender 110" sorts as 1995. Anything without a year in its title, like a parts
-listing, collects at the bottom whichever direction you sort.
+The sort menu offers price, title, and year. If you sort by year, anything without a year in its title will be at the bottom.
 
 ---
 
@@ -408,9 +346,8 @@ the first run these are much quicker.
 Each report tells you what's new, what's still there, and what sold or was
 taken down since last time.
 
-You need an email account the app can send from. Gmail is what these instructions
-use because it's the most common and the fiddliest; Outlook, Hotmail, Live,
-iCloud and any other server you know the address of all work too. See
+You need an email account the app can send from. These instructions describe how to set it up with Gmail, but Outlook,
+iCloud, etc. all work too. See
 [using something other than Gmail](#using-something-other-than-gmail).
 
 ### On a Mac, check where this folder lives first
@@ -422,8 +359,7 @@ never run.
 
 The fix takes ten seconds: quit the app, open Finder, press **Command-Shift-H**
 to go to your home folder, and drag the Faceplace Marketbook folder there. Then
-start it again from its new home. Nothing is lost by moving it — your searches,
-results and Facebook login all live inside the folder and travel with it.
+start it again from its new home.
 
 If you'd rather leave the folder where it is, the app will tell you exactly what
 to do instead when you turn automatic runs on in Part 3. Windows has no such
@@ -464,26 +400,6 @@ message you sent yourself under **Sent Mail** and never puts it in your inbox.
 If the test message isn't in your inbox, look there before assuming it failed.
 Having reports sent to a different address avoids this entirely.
 
-#### If the address or password is wrong
-
-The app checks the *shape* of what you typed the moment you click **Save**: a
-missing @, a space in the middle, a password that isn't the sixteen lowercase
-letters Google issues. Those it tells you about immediately, and a mistyped
-address isn't saved at all.
-
-What it can't know without asking the mail server is whether the address and
-password are *the right ones*. That's what **Send a test email** is for, and it's
-worth the ten seconds — without it, the first sign of a wrong password is a
-scheduled run at 5am that finishes, writes all its results, and can't send them.
-Nothing is lost when that happens (the gallery is still on your computer, and the
-next run picks up where it left off) but you won't hear about it by email, for the
-obvious reason.
-
-One quirk to know, because it sends people looking in the wrong place: if the
-**address** is wrong, the mail server rejects the login and reports it as a bad
-password. The app says so in its message, but if a password you're sure about is
-being refused, check the address for a typo too.
-
 #### Using something other than Gmail
 
 You don't need a Gmail account. Pick your provider from the **Provider** menu:
@@ -493,20 +409,14 @@ You don't need a Gmail account. Pick your provider from the **Provider** menu:
 - **Other** lets you type in any mail server's address and port, which is the
   route for a work account or your own domain.
 
-Two things hold whichever you choose. The address you enter has to be the mailbox
-you're logging into, because mail servers won't let you send as somebody else.
-The address reports are *sent to* can be anything at all — a different account, a
-partner, a phone-number-to-text gateway. The Gmail sent-to-yourself quirk above
-only applies to Gmail.
-
 ### Part 2 — Save a search
 
 1. Click the **New search** tab.
 2. Set up your search exactly as you would for a normal run: query, cities, price
-   limits, exclusions.
+   limits, exclusions, etc.
 3. Scroll to the bottom, to **Run this on a schedule**.
 4. Give it a name. This becomes the folder name and the subject line of your
-   emails, so make it something you'll recognize.
+   emails.
 5. Choose how often, using the number box and the **Hours / Days** menu.
 6. Click **Save scheduled search**.
 
@@ -515,7 +425,7 @@ from when the last one started.
 
 > **Don't set up too many, and don't run them too often.** Every run is a full
 > sweep of every city you picked, and a lot of automated traffic is what gets
-> Facebook accounts limited or banned. **Once a day is usually plenty, 
+> Facebook accounts limited or banned. Once a day is usually plenty, 
 > and more often than every 6 hours is asking for trouble. Two or
 > three saved searches is a sensible ceiling. The app warns you when you go past
 > these, but it won't stop you — it's your account.
@@ -526,13 +436,7 @@ one immediately, edit it, pause it, or delete it.
 **Neither pausing nor deleting touches your results.** Pausing just stops it
 running, and you can resume it later. Deleting removes the schedule and the saved
 settings; the results folder, the gallery, the photos and everything the search
-ever found stay exactly where they are on your computer, and every listing it
-ever collected is still in the app's database.
-
-The one thing deleting does lose is the search's memory of what it had already
-seen. If you save a new search with the same name later, it writes to the same
-results folder again, but its first report will call everything new, because it
-has nothing to compare against any more.
+ever found stay exactly where they are on your computer.
 
 ### Part 3 — Let your computer wake itself up
 
@@ -549,26 +453,24 @@ part gives it permission to wake up, do the run, and go back to sleep.
 
 Then there are a few system settings you might want to change.
 
-#### On a Mac
+<details>
+<summary><strong>On a Mac</strong></summary>
 
 Open **System Settings**, click **Battery**, then **Options…** at the bottom.
 
 - **Wake for network access → Always.** This is what lets a sleeping
   Mac wake up for its scheduled run. On *Only on Power Adapter* — the usual
   default — a scheduled run on battery is skipped and happens the next time the
-  machine is awake instead, and the report tells you it ran late. Nothing is
-  lost either way.
+  machine is awake instead, and the report tells you it ran late.
 - **Low Power Mode → Never**, or **Only on Battery** if you want it to work while
   unplugged. Keep in mind that automated searches will use up some battery life.
 
-**Closing the lid.** With the lid shut and no display attached, a Mac laptop goes
-into a deeper sleep, and scheduled wake-ups stop being dependable. If you
-want overnight runs, leave the lid open and let the screen turn itself off.
+**Closing the lid.** With the lid shut, a Mac laptop goes
+into a deeper sleep, unless it's connected to an external monitor or display. This makes scheduled wake-ups unreliable. If you want overnight runs, leave the lid open and let the screen turn itself off.
 
-**With external monitors, a shut lid is fine.** A Mac driving an external display
-stays in the ordinary kind of sleep, so it wakes for a run normally.
-
-#### On Windows
+</details>
+<details>
+<summary><strong>On Windows</strong></summary>
 
 **Allow wake timers** Press the Windows key, type **Control Panel**, and open it. Then go to 
 **Hardware and Sound → Power Options → Change plan settings → Change advanced power settings**.
@@ -584,6 +486,9 @@ The rest are optional:
   happen. **Hibernate** and **Shut down** don't — both stop scheduled runs until
   you turn the computer back on yourself.
 
+</details>
+<br>
+
 ### What the emails look like
 
 Each report contains:
@@ -598,18 +503,16 @@ Each report contains:
   search the attachments drop photos to stay under email size limits, and the
   message tells you where the full gallery is on your computer.
 
-You'll also get an email if a run couldn't happen:
+You'll also get an email if a search couldn't run:
 
 - **"Please log into Facebook again"** — the saved login expired. Double-click
   **Log into Facebook** in the app's folder, log in, and you're done; the next
-  scheduled run works again. Logging into Facebook in your normal browser won't
-  fix it, because the app keeps its own separate login.
+  scheduled run works again.
 - **"The scheduled run failed"** — something else went wrong. The search stays
   scheduled and tries again next time. The email includes the details.
 
 A report also carries a warning at the top if the run started late, which is what
 you'll see if the computer was asleep or switched off at the scheduled time.
-Nothing is lost — it runs as soon as the machine is available again.
 
 ### Where scheduled results live
 
@@ -618,19 +521,9 @@ same folder every run**, so the folder always holds the current picture rather
 than one folder per run. Previous reports are kept in a `history/` folder inside
 it.
 
-### Turning it off
-
-- **One search:** *Saved searches* tab → **Pause**. Or **Delete** to remove it;
-  its results folder, gallery and photos all stay on your computer.
-- **All of it:** *Email & schedule* tab → **Turn them off**. Your saved searches
-  stay, they just stop running by themselves.
-
-Nothing you can click in this app deletes results. If you want the disk space
-back, delete the folders inside `runs/` yourself.
-
 ---
 
-## When something goes wrong
+## Troubleshooting
 
 **"A leftover browser window is still using this app's saved Facebook login."**
 A browser window from a previous run never closed. Close any stray Chromium
@@ -647,9 +540,6 @@ said Facebook didn't recognise a city, the address used to add it wasn't a real
 Marketplace city. Remove it (hover, click the **✕**) and add it again from a live
 Marketplace address. See [Adding your own cities](#adding-your-own-cities).
 
-**I can't remove one of the built-in cities.** That's deliberate — untick it
-instead. Only cities you added yourself can be removed.
-
 **No email arrived and I never saw an error.** Click **Send a test email** on the
 *Email & schedule* tab. A wrong address or password can't be detected until the
 mail server is asked, and a scheduled run that can't send has no way to tell you
@@ -657,9 +547,8 @@ by email. Your results are still on your computer either way.
 
 **Hardly any results, or none.** Usually the search term is too specific, or the
 excluded terms are too broad. Try fewer words. The other likely cause is the
-search radius: if the app reported less than 500 miles at the pause before the
-sweep, the cities no longer cover the country. Run it again and fix the radius
-at that pause (Step 4 above).
+search radius. Run
+it again and raise the search radius (Step 4 above).
 
 **Some pictures say "image expired".** Facebook's photo links go stale within
 hours. The app saves photos as it goes to avoid this, but a few can slip through
@@ -680,10 +569,6 @@ on a very long run. Running the search again picks them up.
 folder's location, so moving or renaming the folder breaks it. Start the app from
 its folder, then click **Add a shortcut…** on the *Email & schedule* tab — see
 [Step 5](#step-5--put-it-on-your-desktop-if-you-like).
-
-**I said "don't ask again" and now I want a shortcut.** Click **Add a shortcut…**
-on the *Email & schedule* tab. Saying that stops it asking; it doesn't stop you
-having one.
 
 **It said macOS wouldn't keep the Dock entry.** That happens occasionally; the
 Dock is particular about being edited underneath it. The app itself is in your

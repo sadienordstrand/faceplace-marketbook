@@ -76,6 +76,37 @@ BUILTIN_LOCATIONS = {
 }
 
 
+# A label sits in a fixed-width tile in the settings window, three to a row, and
+# an auto-named city is one unbroken run of characters — a slug or a 15-digit id —
+# with nowhere to wrap. 20 is what a tile holds at the window's default width,
+# which leaves real names like "Colorado Springs" and a bare id intact and cuts
+# only the ones that would deform the grid. It's also the label that goes in the
+# emails and the CSV, which is the other reason not to keep the whole slug.
+# The ellipsis in settings.css is the backstop for names typed by hand.
+LABEL_MAX = 20
+
+
+def _fit(name, suffix):
+    room = LABEL_MAX - len(suffix)
+    if len(name) <= room:
+        return name + suffix
+    return name[:room - 1].rstrip() + "…" + suffix
+
+
+def auto_label(seg, taken=()):
+    """The name a city gets when the name box is left blank.
+
+    Two segments can be identical up to the cut. Since nobody chose this name,
+    a clash is ours to settle — numbering it is better than refusing a city the
+    user asked for over a name they never typed."""
+    name = f"loc-{seg}" if seg.isdigit() else seg.replace("-", " ").title()
+    label, n = _fit(name, ""), 1
+    while label in taken:
+        n += 1
+        label = _fit(name, f" {n}")
+    return label
+
+
 def read_locations_file(path):
     """`label -> segment` from one of the two location files, or {} if it isn't
     there or isn't readable. A missing or mangled file is a reason to fall back,
@@ -130,7 +161,7 @@ def add_location(label, text):
     if err:
         return None, err
     locs = load_locations()
-    label = label or (seg.replace("-", " ").title() if not seg.isdigit() else f"loc-{seg}")
+    label = label or auto_label(seg, locs)
     if label in locs:
         return None, f"You already have a city called '{label}'."
     if seg in locs.values():
@@ -177,7 +208,7 @@ def import_urls(path):
             print(f"  [skip] no /marketplace/<seg>/search in: {line[:80]}")
             continue
         seg = m.group(1)
-        locs[label or (seg if not seg.isdigit() else f"loc-{seg}")] = seg
+        locs[label or auto_label(seg, locs)] = seg
     dupes = [k for k in locs if k in BUILTIN_LOCATIONS]
     for k in dupes:
         locs.pop(k)

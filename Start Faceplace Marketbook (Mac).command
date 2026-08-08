@@ -44,7 +44,7 @@ if [ -z "$PY" ]; then
     say "  1. Open  https://www.python.org/downloads/macos/"
     say "  2. Download the latest 'macOS 64-bit universal2 installer'."
     say "  3. Open the downloaded file and click through the installer."
-    say "  4. Double-click this Start Faceplace file again."
+    say "  4. Double-click this Start Faceplace Marketbook file again."
     stop "That's a one-time install. Nothing else to set up."
 fi
 

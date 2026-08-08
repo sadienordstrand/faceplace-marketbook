@@ -1332,7 +1332,7 @@ class TestSending(Redirected):
         self.assertIn("log into Facebook again",
                       RecordingSMTP.sent[0]["Subject"])
         self.assertIn("Log into Facebook by hand", body)
-        self.assertIn("500 miles", body)
+        self.assertIn("search radius", body)
         self.assertIn("Next attempt", body)
 
     def test_error_notices_say_the_search_is_still_scheduled(self):
@@ -1955,6 +1955,47 @@ class TestCities(unittest.TestCase):
             with self.subTest(text=text):
                 _, err = locations.add_location("Nope", text)
                 self.assertTrue(err)
+
+    # ------------------------------------------------ names from a blank box
+    def test_a_blank_name_box_names_the_city_after_the_link(self):
+        locs, err = locations.add_location("", DENVER)
+        self.assertIsNone(err)
+        self.assertEqual(locs["Denver"], "denver")
+
+    def test_a_name_the_tile_can_hold_is_left_alone(self):
+        # Cutting a real city name that already fits would look like a bug.
+        for seg, expect in (("colorado-springs", "Colorado Springs"),
+                            ("108173265878171", "loc-108173265878171")):
+            with self.subTest(seg=seg):
+                self.assertEqual(locations.auto_label(seg), expect)
+
+    def test_a_name_too_wide_for_its_tile_is_cut(self):
+        long_seg = "sanfranciscobayareacalifornia"
+        locs, err = locations.add_location("", f"/marketplace/{long_seg}/search")
+        self.assertIsNone(err)
+        added = [k for k in locs if k not in locations.BUILTIN_LOCATIONS]
+        self.assertEqual(added, ["Sanfranciscobayarea…"])
+        self.assertLessEqual(len(added[0]), locations.LABEL_MAX)
+        self.assertEqual(locs[added[0]], long_seg)
+
+    def test_two_places_that_cut_to_the_same_name_both_get_in(self):
+        # The user never typed either name, so a collision it can't see mustn't
+        # cost it the city it asked for.
+        for seg in ("sanfranciscobayareacalifornia", "sanfranciscobayareanevada"):
+            _, err = locations.add_location("", f"/marketplace/{seg}/search")
+            self.assertIsNone(err)
+        added = [k for k in locations.load_locations()
+                 if k not in locations.BUILTIN_LOCATIONS]
+        self.assertEqual(added, ["Sanfranciscobayarea…", "Sanfranciscobayar… 2"])
+        self.assertTrue(all(len(k) <= locations.LABEL_MAX for k in added))
+
+    def test_a_typed_name_is_kept_exactly_as_typed(self):
+        # Only the app's own naming is cut; the settings window ellipsises a long
+        # one on screen without rewriting what the user asked for.
+        typed = "The Whole Of Northern California"
+        locs, err = locations.add_location(typed, DENVER)
+        self.assertIsNone(err)
+        self.assertIn(typed, locs)
 
     def test_a_slug_shaped_string_is_accepted_because_only_facebook_knows(self):
         # This is the gap the sweep has to cover: 'fdjsklfjsdkl' is a perfectly

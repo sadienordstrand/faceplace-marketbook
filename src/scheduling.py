@@ -1176,7 +1176,7 @@ REAUTH_STEPS = """What to do:
      Windows. It opens a browser window and searches nothing.
   2. Log into Facebook by hand, including any two-factor code. Wait until you
      can see your normal Facebook feed.
-  3. Check that the Marketplace search radius still says 500 miles.
+  3. Check that the Marketplace search radius is still the distance you want.
   4. That's it. The window closes itself and the next scheduled run will work.
 
 Logging into Facebook in Safari, Chrome or Edge will not fix this: the app keeps
@@ -1324,9 +1324,10 @@ def run_saved_search(search, email_cfg=None, sweep=None, send=True, now=None,
         if km and km < fb.EXPECTED_RADIUS_KM:
             warnings.append(
                 f"Your Marketplace search radius is set to about "
-                f"{round(km / 1.609)} miles, not 500. The cities this tool "
-                f"searches are spaced for 500-mile coverage, so there are gaps "
-                f"right now. Open Faceplace Marketbook and reset the radius.")
+                f"{round(km / 1.609)} miles, rather than the 500 Facebook "
+                f"allows, so this run only looked that far out from each city. "
+                f"If you wanted a wider net, open Faceplace Marketbook and "
+                f"raise the radius.")
         if summary.get("interrupted"):
             warnings.append("The run was interrupted partway through, so some "
                             "descriptions and photos are missing.")

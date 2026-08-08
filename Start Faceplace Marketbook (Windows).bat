@@ -78,7 +78,7 @@ echo   1. Open  https://www.python.org/downloads/windows/
 echo   2. Download the latest "Windows installer (64-bit)".
 echo   3. Run it. On the first screen, TICK THE BOX that says
 echo      "Add python.exe to PATH", then click Install Now.
-echo   4. Double-click this Start Faceplace file again.
+echo   4. Double-click this Start Faceplace Marketbook file again.
 echo.
 echo That's a one-time install. Nothing else to set up.
 pause

@@ -58,9 +58,10 @@ __CSS__</style>
         <button class="mini" id="noCities">None</button>
       </div>
     </div>
-    <div class="hint" style="margin: 0 0 14px">The search will include a 500 mile
-      radius around each selected city. Select all cities to get search results
-      from the entire continental US.</div>
+    <div class="hint" style="margin: 0 0 14px">The search reaches out from each
+      selected city as far as your Facebook radius setting allows — up to 500
+      miles. Select all cities and set your radius to 500 miles to get search results from the
+      entire continental US.</div>
     <div class="cities" id="cities"></div>
 
     <div class="addcity">
@@ -69,9 +70,7 @@ __CSS__</style>
              placeholder="paste the Marketplace link for that city">
       <button class="mini" id="addCity">Add city</button>
     </div>
-    <div class="hint addcity-msg" id="addCityMsg">Cities you add are saved in your
-      own file, and you can remove them again by hovering over them. The twelve
-      the app comes with are permanent — untick one to skip it for a run.</div>
+    <div class="hint addcity-msg" id="addCityMsg">Cities you add are saved locally, and you can remove them by hovering over them.</div>
 
     <details class="help">
       <summary>How to get a city's link</summary>
@@ -80,8 +79,9 @@ __CSS__</style>
           <li>Open <b>facebook.com/marketplace</b> in your browser.</li>
           <li>Click the location on the left sidebar — it shows whatever
             city you're currently browsing.</li>
-          <li>Type the city you want, pick it from the list, set the radius to
-            <b>500 miles</b>, and click Apply.</li>
+          <li>Type the city you want, pick it from the list, set the radius you
+            want (<b>500 miles</b> is as far as Facebook goes), and click
+            Apply.</li>
           <li>Copy the whole web address out of the address bar and paste it in
             the box above. It looks like
             <b>facebook.com/marketplace/denver/...</b> — the part right after
@@ -158,7 +158,7 @@ __CSS__</style>
   </section>
 
   <section id="saveBlock">
-    <h2>Run this on a schedule</h2>
+    <h2>Scheduled search</h2>
     <div class="hint" style="margin: 0 0 16px">Save these settings under a name
       and this search will run itself, then email you what it found. It only
       fetches descriptions and photos for listings it hasn't seen before, so

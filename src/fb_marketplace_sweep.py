@@ -170,8 +170,8 @@ def describe_radius(km, note=True):
     miles = round(km / 1.609)
     warn = ""
     if note and km < EXPECTED_RADIUS_KM:
-        warn = ("  <- smaller than the ~500 mi the city spacing assumes; "
-                "coverage will have gaps")
+        warn = ("  <- under Facebook's 500 mi maximum, so each city "
+                "searches less ground")
     return f"~{miles} mi ({km} km){warn}"
 
 
@@ -197,17 +197,17 @@ def preflight_pause(page, url, skip=False):
     print("The browser is ready. Before the sweep starts, in that window:")
     print("\n  1. Close any Facebook popups (notifications, cookie banners).")
     if km and km < EXPECTED_RADIUS_KM:
-        print(f"  2. Change the search radius. It's set to "
-              f"{describe_radius(km, note=False)},")
-        print("     but this needs 500 miles to cover the country. Open the")
-        print("     location control in the left sidebar to change it.")
+        print(f"  2. Check the search radius. It's set to "
+              f"{describe_radius(km, note=False)}. ")
+        print("     Facebook allows up to 500 miles; raise it in")
+        print("     the location control in the left sidebar for a wider net.")
     elif km:
         print(f"  2. Check the search radius. It reads "
               f"{describe_radius(km, note=False)},")
-        print("     which is what you want.")
+        print("     the widest Facebook allows.")
     else:
-        print("  2. Check the search radius in the left sidebar. It should be")
-        print("     500 miles, not the 250 Facebook starts you on.")
+        print("  2. Check the search radius in the left sidebar. Facebook")
+        print("     starts you on 250 miles and allows up to 500.")
     print("     The radius is an account setting, so you only set it once.")
     print("\n  3. Come back here and press Enter.")
     print("=" * 66)
@@ -612,12 +612,18 @@ def run(query, scrolls, exact, out_csv=None, only=None, keep_all=False,
     con.close()
     storage.write_csv(rows, out_path)
     print(f"\nWrote {out_path} and {storage.DB_PATH}")
-    gallery, gallery_path = None, None
+    gallery, gallery_path, light_gallery = None, None, None
     if do_gallery and rows:
         try:
             import build_gallery
             gallery_path = Path(build_gallery.build(out_path))
             gallery = gallery_path.name
+            # The same catalogue, but pointing at the photos in thumbnails/
+            # rather than carrying them. A fraction of the size, at the cost of
+            # only working while it sits in the run folder.
+            light_gallery = Path(build_gallery.build(
+                out_path, out_path.with_name("lightweight_gallery.html"),
+                embed=False)).name
         except Exception as e:
             print(f"Gallery step failed ({e}). Run: "
                   f"python3 src/build_gallery.py {out_path}")
@@ -658,6 +664,7 @@ def run(query, scrolls, exact, out_csv=None, only=None, keep_all=False,
             "images_local": sum(1 for r in rows
                                 if (r.get("image") or "").startswith(f"{thumbs_path.name}/")),
             "files": {"csv": out_path.name, "gallery": gallery,
+                      "lightweight_gallery": light_gallery,
                       "thumbnails": thumbs_path.name,
                       "database": str(storage.DB_PATH)},
         }
@@ -688,6 +695,8 @@ def run(query, scrolls, exact, out_csv=None, only=None, keep_all=False,
         "run_dir": str(run_dir) if run_dir else None,
         "csv": str(out_path),
         "gallery": str(gallery_path) if gallery_path else None,
+        "lightweight_gallery": (str(out_path.with_name(light_gallery))
+                                if light_gallery else None),
         "started": started_iso,
         "finished": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "duration_seconds": round(elapsed, 1),
@@ -801,8 +810,9 @@ def set_radius():
         before = read_radius_km(page)
         print(f"\nCurrent radius: {describe_radius(before) or 'unknown'}")
         if before == EXPECTED_RADIUS_KM:
-            print("That's the 500-mile maximum, which is what the saved city "
-                  "spacing assumes — no change needed unless you want it smaller.")
+            print("That's the 500-mile maximum — the widest Facebook will "
+                  "search around each city. No change needed unless you want "
+                  "it smaller.")
         print(">> In the browser window, open the location/radius control in the "
               "left sidebar and set the radius. This is an account setting, so "
               "it sticks for every future run. Waiting up to 5 minutes...")

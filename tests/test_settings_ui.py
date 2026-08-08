@@ -29,6 +29,8 @@ except ImportError:
     HAVE_PLAYWRIGHT = False
 
 CITIES = ["Medford, OR", "Sacramento, CA", "Denver, CO"]
+LONG_CITY = "A name someone typed by hand that is absurdly long"
+LONG_ID = "loc-108173265878171108173265878171"
 PACES = {"fast": (1.0, 2.5), "slow": (3.0, 5.0)}
 OFFER = {"ask": True, "why": "Want something quicker to reach?",
          "places": [{"id": "desktop", "label": "Desktop", "on": True},
@@ -433,21 +435,38 @@ class UITest(unittest.TestCase):
             self.assertIsNone(builtin)
             self.assertIsNotNone(page.query_selector(
                 '.tog[data-city="Denver, CO"] .tog-x'))
-            self.assertIn("permanent", page.text_content("#addCityMsg"))
+            self.assertIn("remove", page.text_content("#addCityMsg"))
         self.drive(script, cities=["Medford, OR", "Denver, CO"],
                    builtins=["Medford, OR"])
 
-    def test_a_city_the_user_added_takes_two_clicks_to_remove(self):
+    def test_a_city_the_user_added_goes_on_the_first_click(self):
         def script(page):
-            x = '.tog[data-city="Denver, CO"] .tog-x'
-            page.click(x)
-            self.assertEqual(page.text_content(x), "Remove?")
-            self.assertIsNotNone(page.query_selector('.tog[data-city="Denver, CO"]'))
-            page.click(x)
+            page.click('.tog[data-city="Denver, CO"] .tog-x')
             page.wait_for_selector('.tog[data-city="Denver, CO"]', state="detached")
             self.assertIn("Removed Denver, CO", page.text_content("#addCityMsg"))
         self.drive(script, cities=["Medford, OR", "Denver, CO"],
                    builtins=["Medford, OR"])
+
+    def test_a_long_city_name_cannot_stretch_its_tile(self):
+        # Two ways a long name used to deform the grid, so both are pinned here
+        # against two rows, where uneven tiles have something to be uneven with:
+        # an id with nothing to wrap on widened its own column, and a name with
+        # spaces wrapped onto a second line and made its row taller.
+        def script(page):
+            page.wait_for_selector(".cities .tog")
+            boxes = page.eval_on_selector_all(
+                ".cities .tog", "els => els.map(e => e.getBoundingClientRect())")
+            widths = {round(b["width"]) for b in boxes}
+            heights = {round(b["height"]) for b in boxes}
+            self.assertEqual(len(widths), 1, f"tiles came out uneven: {widths}")
+            self.assertEqual(len(heights), 1, f"tiles wrapped: {heights}")
+            # Nothing is lost to the cut: the whole name is there to hover over.
+            clipped = page.eval_on_selector(
+                '.tog[data-city="%s"] .lbl' % LONG_CITY,
+                "el => el.scrollWidth > el.clientWidth && el.title")
+            self.assertEqual(clipped, LONG_CITY)
+        self.drive(script, cities=["Medford, OR", LONG_ID, "Denver, CO",
+                                   "Boise, ID", LONG_CITY, "Dallas, TX"])
 
     def test_a_refused_removal_keeps_the_city_and_says_why(self):
         # The button is hidden for built-ins, so this can only be reached by a
@@ -457,9 +476,7 @@ class UITest(unittest.TestCase):
                 '.tog[data-city="Medford, OR"]',
                 "el => el.insertAdjacentHTML('beforeend',"
                 " '<button class=\"tog-x\">x</button>')")
-            x = '.tog[data-city="Medford, OR"] .tog-x'
-            page.click(x)
-            page.click(x)
+            page.click('.tog[data-city="Medford, OR"] .tog-x')
             page.wait_for_function(
                 "() => document.getElementById('addCityMsg')"
                 ".textContent.includes(\"can't be removed\")")

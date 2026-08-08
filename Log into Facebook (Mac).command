@@ -9,4 +9,4 @@ here="${0%/*}"
 [ -z "$here" ] || [ "$here" = "$0" ] && here="."
 cd "$here" || exit 1
 
-exec "./Start Faceplace (Mac).command" --login
+exec "./Start Faceplace Marketbook (Mac).command" --login

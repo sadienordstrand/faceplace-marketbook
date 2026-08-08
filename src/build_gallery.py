@@ -9,7 +9,8 @@ Turn a results CSV into a single self-contained HTML gallery.
 Writes gallery.html next to the CSV. Locally downloaded thumbnails are baked
 into the file as data URIs by default, so the gallery is one portable file
 with no dependency on the thumbnails/ folder, relative paths, or Facebook URLs.
-Pass --no-embed to link the thumbnails instead and keep the file small.
+Pass --no-embed to link the thumbnails instead and keep the file small; that's
+how a run's lightweight_gallery.html is made.
 
 The page itself is ui/gallery.html, with the listings and the shared palette
 substituted in here. Everything ends up inline in the output because a gallery

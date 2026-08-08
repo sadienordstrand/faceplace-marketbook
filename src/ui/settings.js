@@ -34,7 +34,10 @@ function renderCities(labels, selected) {
     d.setAttribute('aria-pressed', !selected || selected.has(label) ? 'true' : 'false');
     // The cities that ship with the app have no remove button: they're spaced to
     // cover the country, and unchecking one skips it just as well.
-    d.innerHTML = `<span class="box">✓</span><span class="lbl">${escHtml(label)}</span>`
+    // The label is cut off with an ellipsis when it's wider than its tile, so it
+    // carries the full name as a tooltip.
+    d.innerHTML = `<span class="box">✓</span>`
+      + `<span class="lbl" title="${escHtml(label)}">${escHtml(label)}</span>`
       + (BUILTINS.includes(label)
          ? '' : `<button class="tog-x" title="Remove this city">✕</button>`);
     cityWrap.appendChild(d);
@@ -72,20 +75,13 @@ $('addCity').onclick = async () => {
     if (e.key === 'Enter') { e.preventDefault(); $('addCity').click(); }
   }));
 
-// Removing edits locations.json on disk, so it asks for a second click rather
-// than deleting a city out from under a stray cursor.
+// One click removes it. Adding it back is a paste of the same Marketplace link,
+// so a confirmation step would cost more than the mistake it prevents.
 cityWrap.addEventListener('click', async e => {
   const x = e.target.closest('.tog-x');
   if (!x) return;
   e.stopPropagation();
   const label = x.closest('.tog').dataset.city;
-  if (!x.dataset.confirm) {
-    cityWrap.querySelectorAll('.tog-x[data-confirm]').forEach(o => {
-      delete o.dataset.confirm; o.textContent = '✕';
-    });
-    x.dataset.confirm = '1'; x.textContent = 'Remove?';
-    return;
-  }
   const res = await window.pyRemoveCity(label);
   const keep = selectedCities();
   if (!res.error) keep.delete(label);

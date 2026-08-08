@@ -84,9 +84,15 @@
   .seg button[aria-pressed="true"] { background: var(--accent); color: #241608; font-weight: 700; }
   .seg button:hover:not([aria-pressed="true"]) { background: var(--card-hi); color: var(--ink); }
 
-  .cities { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  /* minmax(0, ...) rather than a bare 1fr: a long city name is one unbreakable
+     word, and a plain 1fr column would widen to fit it, pulling every other
+     tile in the grid out of line. */
+  .cities { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
   .cities .tog { padding-right: 6px; }
-  .tog .lbl { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .tog .lbl {
+    flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap;
+  }
   .tog-x {
     flex: none; background: none; border: 0; cursor: pointer; color: var(--ink-soft);
     font: 10pt var(--type); letter-spacing: .1em; padding: 3px 6px; border-radius: 2px;
@@ -94,7 +100,6 @@
   }
   .tog:hover .tog-x, .tog-x:focus { opacity: 1; }
   .tog-x:hover { color: #241608; background: var(--accent); }
-  .tog-x[data-confirm] { opacity: 1; color: var(--accent); }
 
   .addcity { display: flex; gap: 10px; margin-top: 14px; align-items: stretch; }
   .addcity input { flex: 1; min-width: 0; }
