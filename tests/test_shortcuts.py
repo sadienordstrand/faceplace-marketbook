@@ -58,7 +58,6 @@ class Offer(Redirected):
         self.assertEqual([p["id"] for p in offer["places"]], ["desktop", "dock"])
         # Only the first is ticked; the Dock is more of an imposition.
         self.assertEqual([p["on"] for p in offer["places"]], [True, False])
-        self.assertIn("Dock", offer["note"])
 
     def test_a_fresh_windows_machine_is_offered_the_start_menu(self):
         self.on("Windows")

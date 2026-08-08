@@ -53,12 +53,6 @@ PLACES = {"Darwin": ("desktop", "dock"), "Windows": ("desktop", "startmenu")}
 PLACE_LABELS = {"desktop": "Desktop", "dock": "Dock", "startmenu": "Start menu"}
 PLACE_PHRASES = {"desktop": "on your desktop", "dock": "in your Dock",
                  "startmenu": "in your Start menu"}
-PLACE_NOTES = {
-    "dock": "Adding it to the Dock puts a copy in your own Applications folder "
-            "for the Dock to point at, and makes the Dock blink as it restarts.",
-    "startmenu": "In the Start menu it doesn't sit on screen, but typing "
-                 "\"Faceplace\" will find it.",
-}
 
 # macOS lays icons out on a 1024-pixel grid with the rounded square filling the
 # middle 824 of it. Drawing edge to edge instead leaves an icon that looks a
@@ -319,14 +313,11 @@ def offer(force=False):
     spare = [p for p in places if p not in taken]
     return {
         "ask": True,
-        "why": f"You start {APP_NAME} by opening its folder and double-clicking "
-               f"Start Faceplace Marketbook. Want something quicker to reach?",
         "places": [{"id": p,
                     "label": PLACE_LABELS[p] + ("" if p not in taken
                                                 else " — there's one here already"),
                     "on": p == (spare[0] if spare else None)}
                    for p in places],
-        "note": " ".join(PLACE_NOTES[p] for p in places if p in PLACE_NOTES),
     }
 
 
