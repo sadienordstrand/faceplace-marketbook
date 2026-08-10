@@ -1,0 +1,16 @@
+  /* The offer of a newer version, above the tabs' content so it's the same
+     first thing whichever tab the window opens on. */
+  section.update { border-color: rgba(237, 146, 107, .45); }
+  .updrow {
+    display: flex; align-items: center; justify-content: space-between; gap: 22px;
+  }
+  .updlead {
+    font-family: var(--type); font-size: 10pt; letter-spacing: .16em;
+    text-transform: uppercase; color: var(--accent); font-weight: 700;
+  }
+  .updrow .hint { margin-top: 7px; }
+  .updacts { display: flex; gap: 9px; flex: none; }
+  /* Both buttons go dead while the update runs, and the only sign of it would
+     otherwise be that clicking them does nothing. */
+  .updacts .mini:disabled { opacity: .4; cursor: default; }
+  .updacts .mini:disabled:hover { background: none; color: var(--accent); }

@@ -62,8 +62,28 @@ if not exist ".venv\.browser-installed" (
 )
 
 rem --- 5. Go -----------------------------------------------------------------
+rem FACEPLACE_RELAUNCH is how the app knows a restart is on offer at all. Without
+rem it, it tells the person to start the app again themselves instead of
+rem promising to do it for them. The number is the exit code to watch for.
+set "FACEPLACE_RELAUNCH=75"
 "%VPY%" "src\fb_marketplace_sweep.py" %*
 set "STATUS=%ERRORLEVEL%"
+
+rem --- 6. Start again, if the app just replaced its own files ------------------
+rem Only starting Python afresh actually loads the new version, and coming back
+rem through here is what reinstalls the libraries it might need.
+rem
+rem This runs the file again rather than looping back to a label above, because
+rem the update may have just rewritten this very file, and cmd keeps its place in
+rem a batch by byte offset — jumping around inside one that changed underneath us
+rem would run whatever happened to land at that position. Starting it afresh
+rem reads the new file from the top. Control never comes back here.
+if "%STATUS%"=="75" (
+    echo.
+    echo Starting again on the new version...
+    echo.
+    "%~f0" %*
+)
 
 echo.
 if not "%STATUS%"=="0" echo Faceplace exited with an error ^(code %STATUS%^). The messages above say why.

@@ -216,7 +216,9 @@
     color: var(--ink); white-space: pre-line;
   }
   .note.ok { border-left-color: #8FA85C; background: rgba(143,168,92,.1); }
-  .note.bad { border-left-color: var(--accent); }
+  /* A refusal has to look like one at a glance: the bar alone reads the same as
+     the neutral "Saving…" note sitting in the same spot a second earlier. */
+  .note.bad { border-left-color: var(--accent); color: var(--accent); }
   .note[hidden] { display: none; }
   .schedstate {
     display: flex; align-items: center; gap: 14px; flex-wrap: wrap;

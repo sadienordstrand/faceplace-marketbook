@@ -169,6 +169,29 @@ class UITest(unittest.TestCase):
         self.assertEqual(rows[0]["cities"], ["Medford, OR"])
         self.assertEqual(rows[0]["interval"], {"every": 1, "unit": "days"})
 
+    def test_the_year_filter_survives_a_save_and_an_edit(self):
+        def script(page):
+            page.fill("#min_year", "1970")
+            page.fill("#max_year", "1995")
+            page.click("#include_no_year")
+            self.fill_and_save(page)
+            # Reopening it has to restore what was saved, not the defaults —
+            # otherwise an edit of the name quietly re-widens the year range.
+            page.fill("#min_year", "")
+            page.fill("#max_year", "")
+            page.click("#tabSaved")
+            page.click(".card button[data-act=edit]")
+            page.wait_for_selector("#cancelEdit:not([hidden])")
+            self.assertEqual(page.input_value("#min_year"), "1970")
+            self.assertEqual(page.input_value("#max_year"), "1995")
+            self.assertEqual(
+                page.get_attribute("#include_no_year", "aria-pressed"), "false")
+        self.drive(script)
+        row = self.saved()[0]
+        self.assertEqual(row["min_year"], 1970)
+        self.assertEqual(row["max_year"], 1995)
+        self.assertIs(row["include_no_year"], False)
+
     def test_saving_without_a_name_is_refused_in_the_window(self):
         def script(page):
             page.fill("#query", "defender 110")
@@ -305,6 +328,8 @@ class UITest(unittest.TestCase):
             page.fill("#query", "defender 110")
             page.fill("#exclude", "rhd, can am")
             page.fill("#max_price", "40000")
+            page.fill("#min_year", "1970")
+            page.fill("#max_year", "1995")
             page.click("#noCities")
             page.click(".cities .tog[data-city='Denver, CO']")
             page.click("#start")
@@ -314,7 +339,47 @@ class UITest(unittest.TestCase):
         self.assertEqual(data["query"], "defender 110")
         self.assertEqual(data["cities"], ["Denver, CO"])
         self.assertEqual(data["max_price"], 40000)
+        self.assertEqual(data["min_year"], 1970)
+        self.assertEqual(data["max_year"], 1995)
         self.assertEqual(data["exclude"], "rhd, can am")
+
+    def test_undated_listings_are_included_unless_asked_otherwise(self):
+        def script(page):
+            page.fill("#query", "defender 110")
+            self.assertEqual(
+                page.get_attribute("#include_no_year", "aria-pressed"), "true")
+            page.click("#include_no_year")
+            page.click("#start")
+            page.wait_for_timeout(300)
+        self.assertIs(self.drive(script)["include_no_year"], False)
+
+    def test_a_backwards_or_negative_range_blocks_the_sweep(self):
+        """Every one of these has to reach the button, not just the message:
+        an explanation nobody reads still lets an hour-long sweep start on a
+        range that can't match anything."""
+        cases = [
+            (("#min_price", "900"), ("#max_price", "100"), "minimum price"),
+            (("#min_price", "-5"), ("#max_price", ""), "negative"),
+            (("#min_year", "1995"), ("#max_year", "1970"), "minimum year"),
+            (("#min_year", "12"), ("#max_year", ""), "between 1900"),
+        ]
+
+        def script(page):
+            page.fill("#query", "defender 110")
+            for (lo_id, lo), (hi_id, hi), expected in cases:
+                page.fill(lo_id, lo)
+                page.fill(hi_id, hi)
+                self.assertFalse(page.is_hidden("#filterMsg"), expected)
+                self.assertIn(expected, page.text_content("#filterMsg").lower())
+                self.assertTrue(page.is_disabled("#start"), expected)
+                self.assertTrue(page.is_disabled("#saveSearch"), expected)
+                self.assertIn("check the filters", page.text_content("#est"))
+                page.fill(lo_id, "")
+                page.fill(hi_id, "")
+            # and clearing the last of them puts the button back
+            self.assertTrue(page.is_hidden("#filterMsg"))
+            self.assertFalse(page.is_disabled("#start"))
+        self.drive(script)
 
     def test_start_is_disabled_without_a_query_or_a_city(self):
         def script(page):
@@ -692,6 +757,136 @@ class UITest(unittest.TestCase):
                 script(page),
                 page.evaluate("window.pyCancel()")))
         self.assertEqual(self.errors, [])
+
+
+@unittest.skipUnless(HAVE_PLAYWRIGHT, "needs Playwright")
+class UpdateBanner(unittest.TestCase):
+    """The offer of a newer version, which most launches never show at all.
+
+    Its own class rather than another UITest: the banner needs none of the
+    saved-search plumbing, and driving it with only its three hooks also proves
+    it doesn't quietly depend on the rest of the window being wired up.
+    """
+
+    OFFER = {"show": True, "version": "1.3.0", "current": "1.0.0"}
+
+    def drive(self, script, offer=None, answer=None):
+        self.waved_off = []
+        self.errors = []
+        hooks = {
+            "update_offer": lambda: offer or {"show": False},
+            "update_skip": lambda v: self.waved_off.append(v) or {"ok": True},
+            "update_now": lambda: answer or {
+                "ok": True, "version": "1.3.0", "notes": [],
+                "message": "Updated to 1.3.0."},
+        }
+
+        def ready(page):
+            page.on("pageerror", lambda e: self.errors.append(str(e)))
+            try:
+                script(page)
+            finally:
+                if not page.is_closed():
+                    page.evaluate("window.pyCancel()")
+
+        data = settings_ui.collect_settings(
+            CITIES, PACES, {"query": "", "exclude": "", "pace": "fast"},
+            headless=True, hooks=hooks, on_ready=ready)
+        self.assertEqual(self.errors, [], f"JavaScript errors: {self.errors}")
+        return data
+
+    def test_a_copy_that_is_up_to_date_says_nothing(self):
+        self.drive(lambda page:
+                   self.assertTrue(page.query_selector("#updateBar").is_hidden()))
+
+    def test_a_copy_that_is_behind_is_told_which_version_is_out(self):
+        def script(page):
+            page.wait_for_selector("#updateBar:visible")
+            self.assertIn("1.3.0", page.text_content("#updLead"))
+            self.assertIn("Update to the latest version?",
+                          page.text_content("#updText"))
+        self.drive(script, offer=self.OFFER)
+
+    def test_being_far_behind_reads_the_same_as_being_one_behind(self):
+        seen = []
+
+        def script(page):
+            page.wait_for_selector("#updateBar:visible")
+            seen.append(page.text_content("#updText").strip())
+        self.drive(script, offer={"show": True, "version": "1.0.1",
+                                  "current": "1.0.0"})
+        self.drive(script, offer={"show": True, "version": "9.4.0",
+                                  "current": "1.0.0"})
+        self.assertEqual(seen[0], seen[1])
+
+    def test_not_now_puts_it_away_and_says_which_one_was_waved_off(self):
+        def script(page):
+            page.wait_for_selector("#updateBar:visible")
+            page.click("#updSkip")
+            page.wait_for_selector("#updateBar", state="hidden")
+        self.drive(script, offer=self.OFFER)
+        self.assertEqual(self.waved_off, ["1.3.0"])
+
+    def test_an_update_that_lands_blocks_the_rest_of_the_window(self):
+        # The code on disk is now newer than the code already running, so there
+        # must be no way back to the form from here — only out.
+        def script(page):
+            page.click("#updGo")
+            page.wait_for_selector("#updateDone:visible")
+            self.assertTrue(page.query_selector("#updateBar").is_hidden())
+            page.click("#updateDoneClose")
+        self.assertEqual(self.drive(script, offer=self.OFFER),
+                         {"action": "updated"})
+
+    def test_a_window_that_can_be_restarted_bows_out_on_its_own(self):
+        # Nothing here needs a decision: the new version is on disk and the only
+        # thing in the way of it is this window.
+        landed = {"ok": True, "version": "1.3.0", "notes": [], "restart": True,
+                  "message": "Updated to 1.3.0. Restarting to finish."}
+
+        def script(page):
+            page.click("#updGo")
+            page.wait_for_selector("#updateDone:visible")
+            self.assertEqual(page.text_content("#updateDoneClose"), "Restart now")
+            # Submitting doesn't close the window from the page's side — Python
+            # notices and takes it down — so the guard that stops a click and
+            # the timer both answering is what there is to watch.
+            page.wait_for_function("finishUpdate.already === true", timeout=10000)
+        self.assertEqual(self.drive(script, offer=self.OFFER, answer=landed),
+                         {"action": "updated"})
+
+    def test_a_window_with_a_note_in_it_waits_to_be_dismissed(self):
+        # Something didn't go to plan, and closing on a timer would take the
+        # explanation with it before it could be read.
+        landed = {"ok": True, "version": "1.3.0", "restart": True,
+                  "notes": ["“Start Faceplace Marketbook (Windows).bat” is "
+                            "still on the old version; it was in use."],
+                  "message": "Updated to 1.3.0. Choose Restart now to finish."}
+
+        def script(page):
+            page.click("#updGo")
+            page.wait_for_selector("#updateDone:visible")
+            self.assertIn("still on the old version",
+                          page.text_content("#updateDoneText"))
+            # Comfortably past the moment a window with nothing to say would
+            # have bowed out.
+            page.wait_for_timeout(4000)
+            self.assertFalse(page.evaluate("finishUpdate.already === true"))
+            page.click("#updateDoneClose")
+        self.assertEqual(self.drive(script, offer=self.OFFER, answer=landed),
+                         {"action": "updated"})
+
+    def test_an_update_that_fails_says_why_and_leaves_the_button_alive(self):
+        answer = {"error": "Couldn't reach GitHub. Check your internet connection."}
+
+        def script(page):
+            page.click("#updGo")
+            page.wait_for_selector("#updMsg:not([hidden])")
+            self.assertIn("Couldn't reach GitHub", page.text_content("#updMsg"))
+            self.assertTrue(page.query_selector("#updateDone").is_hidden())
+            # Still offered, because trying again is the right thing to do next.
+            self.assertFalse(page.query_selector("#updGo").is_disabled())
+        self.drive(script, offer=self.OFFER, answer=answer)
 
 
 if __name__ == "__main__":

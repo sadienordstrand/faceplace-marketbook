@@ -11,7 +11,8 @@ Two of them are easy to confuse:
 
 Under ROOT sits .state/, holding what the app maintains for itself: the browser
 profile with the Facebook login, the cumulative database, saved searches, the
-email settings, your own cities, and the scheduler's lock and log.
+email settings, your own cities, the update check's notes, and the scheduler's
+lock and log.
 
 Nothing under .state/ is tracked by git.
 """
@@ -46,6 +47,12 @@ SEARCHES_PATH = STATE_DIR / "saved_searches.json"
 EMAIL_CONFIG_PATH = STATE_DIR / "email_config.json"
 # Which shortcuts have been made, and whether the offer of one was waved away.
 SHORTCUTS_PATH = STATE_DIR / "shortcuts.json"
+# When the repository was last asked what the newest version is, what it said,
+# and any version the user waved away.
+UPDATE_STATE_PATH = STATE_DIR / "update.json"
+# Scratch space for an update in progress: the copy of the current code that an
+# interrupted one is put back from. Empty at rest.
+UPDATE_DIR = STATE_DIR / "update"
 # Windows shortcuts point at an icon file rather than carrying a copy of the
 # picture, so it has to live somewhere permanent. It's generated from the SVG,
 # so it belongs with the other generated things rather than beside the drawing.

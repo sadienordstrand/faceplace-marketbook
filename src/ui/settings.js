@@ -126,6 +126,16 @@ document.addEventListener('keydown', e => {
 const on = id => $(id).getAttribute('aria-pressed') === 'true';
 const num = id => $(id).value === '' ? null : Number($(id).value);
 
+// The range the year reader itself works in, kept in step with listings.py. A
+// bound outside it can only ever match nothing, so the form refuses it rather
+// than let a sweep run for an hour and come back empty.
+const EARLIEST_YEAR = 1900;
+const LATEST_YEAR = new Date().getFullYear() + 1;
+['min_year', 'max_year'].forEach(id => {
+  $(id).min = EARLIEST_YEAR;
+  $(id).max = LATEST_YEAR;
+});
+
 function collect() {
   return {
     query: $('query').value.trim(),
@@ -135,6 +145,9 @@ function collect() {
     exact: on('exact'),
     min_price: num('min_price'),
     max_price: num('max_price'),
+    min_year: num('min_year'),
+    max_year: num('max_year'),
+    include_no_year: on('include_no_year'),
     exclude: $('exclude').value.trim(),
     do_descriptions: on('do_descriptions'),
     do_thumbs: on('do_thumbs'),
@@ -144,6 +157,22 @@ function collect() {
     limit: num('limit'),
     descriptions_budget: num('descriptions_budget'),
   };
+}
+
+// A range that can't match anything is a mistake worth catching in the form,
+// because the sweep it starts looks exactly like a successful one that simply
+// found nothing — an hour of scrolling, then an empty gallery.
+function filterProblems(c) {
+  const out = [];
+  if (c.min_price < 0 || c.max_price < 0) out.push("A price can't be negative.");
+  if (c.min_price != null && c.max_price != null && c.min_price > c.max_price)
+    out.push('The minimum price is higher than the maximum price.');
+  const badYear = y => y != null && (y < EARLIEST_YEAR || y > LATEST_YEAR);
+  if (badYear(c.min_year) || badYear(c.max_year))
+    out.push(`Years have to be between ${EARLIEST_YEAR} and ${LATEST_YEAR}.`);
+  if (c.min_year != null && c.max_year != null && c.min_year > c.max_year)
+    out.push('The minimum year is later than the maximum year.');
+  return out;
 }
 
 function refresh() {
@@ -160,14 +189,20 @@ function refresh() {
     parts.push(`<b>${Math.round(secsPer(pace, c.do_thumbs))}s</b> per listing`);
     parts.push(c.limit ? `<b>${c.limit}</b> max` : `<b>all</b> listings`);
   } else parts.push('no descriptions');
+  // The filters are far enough up the page to be off-screen, so the footer has
+  // to say why the button it sits next to went dead.
+  const problems = filterProblems(c);
+  say('filterMsg', problems.join(' '), 'bad');
   $('est').innerHTML = parts.join(' &middot; ')
-    + (c.query ? '' : ' &middot; <span class="warn">query required</span>');
-  $('start').disabled = !c.query || c.cities.length === 0;
+    + (c.query ? '' : ' &middot; <span class="warn">query required</span>')
+    + (problems.length ? ' &middot; <span class="warn">check the filters</span>' : '');
+  $('start').disabled = !c.query || c.cities.length === 0 || problems.length > 0;
+  $('saveSearch').disabled = problems.length > 0;
 }
 
 $('query').addEventListener('input', refresh);
-['min_price','max_price','exclude','limit','descriptions_budget']
-  .forEach(id => $(id).addEventListener('input', refresh));
+['min_price','max_price','min_year','max_year','exclude','limit',
+ 'descriptions_budget'].forEach(id => $(id).addEventListener('input', refresh));
 
 $('start').onclick = () => {
   $('start').disabled = true;
@@ -259,6 +294,10 @@ function startEditing(s) {
   $('exclude').value = s.exclude || '';
   $('min_price').value = s.min_price == null ? '' : s.min_price;
   $('max_price').value = s.max_price == null ? '' : s.max_price;
+  $('min_year').value = s.min_year == null ? '' : s.min_year;
+  $('max_year').value = s.max_year == null ? '' : s.max_year;
+  $('include_no_year').setAttribute('aria-pressed',
+    s.include_no_year === false ? 'false' : 'true');
   $('limit').value = s.limit == null ? '' : s.limit;
   $('exact').setAttribute('aria-pressed', s.exact ? 'true' : 'false');
   $('do_descriptions').setAttribute('aria-pressed',

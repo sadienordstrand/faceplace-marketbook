@@ -13,6 +13,7 @@ page order, which is how the out-of-radius divider is found.
 import json
 import re
 from datetime import datetime, timezone
+from functools import lru_cache
 
 ITEM_RE = re.compile(r"/marketplace/item/(\d+)")
 PRICE_LINE_RE = re.compile(r"\$[\d,]+(?:\.\d{2})?")
@@ -127,17 +128,30 @@ def matches_query(tokens, *texts):
     return all(word_hits(t, hay) for t in tokens)
 
 
-def squash(s):
-    """Strip everything but alphanumerics so one --exclude term covers the
-    'Can-Am' / 'Can Am' / 'CANAM' spellings that all appear in real listings."""
-    return re.sub(r"[^a-z0-9]", "", (s or "").lower())
+@lru_cache(maxsize=256)
+def exclude_pattern(term):
+    """One --exclude term as a regex, or None if there's nothing to match on.
+
+    The term's words have to appear in that order, each starting a word, with
+    at least one space or punctuation mark between them. So 'can am' covers
+    'Can-Am' and 'CAN AM' — the spellings of the same words — but not 'canam',
+    which is a different word, and 'fender' no longer sits inside 'Defender'
+    and takes every Land Rover in the sweep with it.
+
+    Word start rather than whole word, matching how query words are handled, so
+    'can am' still catches 'Can-Ams' without anyone having to think about it."""
+    parts = re.findall(r"[a-z0-9]+", (term or "").lower())
+    if not parts:
+        return None
+    return re.compile(r"\b" + r"[^a-z0-9]+".join(re.escape(p) for p in parts))
 
 
 def is_excluded(r, terms):
     if not terms:
         return False
-    hay = squash(f"{r.get('title', '')} {r.get('raw_text', '')}")
-    return any(squash(t) in hay for t in terms if t.strip())
+    hay = f"{r.get('title', '')} {r.get('raw_text', '')}".lower()
+    pats = (exclude_pattern(t) for t in terms)
+    return any(p.search(hay) for p in pats if p)
 
 
 def price_number(price):
@@ -149,6 +163,32 @@ def price_number(price):
         return int(m.group(0).replace(",", ""))
     except ValueError:
         return None
+
+
+YEAR_RE = re.compile(r"\b(1[89]\d{2}|20\d{2})\b")
+EARLIEST_YEAR = 1900
+
+
+def latest_year():
+    """One year ahead, because next year's models are listed before it arrives."""
+    return datetime.now(timezone.utc).year + 1
+
+
+def year_number(title):
+    """The model year in a title, or None when there isn't a plausible one.
+
+    Deliberately the same rule the gallery uses for its year sort (yearOf in
+    ui/gallery.html): vehicle sellers almost always lead with the model year, so
+    it's the first 4-digit number in the title that could be one, bounded so trim
+    numbers and part numbers can't masquerade as a year. The two have to agree —
+    otherwise a listing could pass a year filter here and then sort as undated
+    there, in the gallery that same run produced."""
+    latest = latest_year()
+    for m in YEAR_RE.finditer(str(title or "")):
+        y = int(m.group(1))
+        if EARLIEST_YEAR <= y <= latest:
+            return y
+    return None
 
 
 def relevance(r, tokens, numbers):
@@ -219,7 +259,8 @@ def build_rows(cards, divider_seen, json_listings, label, query, tokens):
     return rows
 
 
-def keep_row(r, exclude=(), min_price=None, max_price=None):
+def keep_row(r, exclude=(), min_price=None, max_price=None,
+             min_year=None, max_year=None, include_no_year=True):
     """Returns (keep, reason_it_was_dropped)."""
     if r["source_section"] == "outside_search":
         return False, "outside search"
@@ -235,10 +276,22 @@ def keep_row(r, exclude=(), min_price=None, max_price=None):
             return False, "under min price"
         if max_price is not None and p > max_price:
             return False, "over max price"
+    # include_no_year only means anything alongside a bound. On its own it would
+    # throw away every listing whose seller didn't put a year in the title, which
+    # is not what unchecking a box next to an empty year range asks for.
+    if min_year is not None or max_year is not None:
+        y = year_number(r.get("title"))
+        if y is None:
+            if not include_no_year:
+                return False, "no year in title"
+        elif min_year is not None and y < min_year:
+            return False, "under min year"
+        elif max_year is not None and y > max_year:
+            return False, "over max year"
     return True, ""
 
 
-def card_may_keep(card, tokens, exclude=(), min_price=None, max_price=None):
+def card_may_keep(card, tokens, min_price=None, max_price=None):
     """The in-loop version of keep_row, used only to decide whether a scroll
     was worth doing.
 
@@ -246,7 +299,20 @@ def card_may_keep(card, tokens, exclude=(), min_price=None, max_price=None):
     errs toward yes: a card whose text has not rendered, or whose price did not
     parse, counts as a match rather than risk cutting the scroll short. Real
     filtering still happens on the merged rows afterwards, so a generous answer
-    here costs a couple of extra scrolls at worst."""
+    here costs a couple of extra scrolls at worst.
+
+    Only the query words and the price bounds are tested. The exclude terms and
+    the year bounds are left out permanently, because both of them narrow a feed
+    Facebook is still ordering by its own relevance: a stretch of excluded or
+    wrong-year listings says nothing about whether the ones being looked for have
+    run out, and three of those in a row would end the city while they were still
+    further down the page. Price stays because Facebook applies it server-side as
+    well, so a priced-out listing largely never arrives to be counted.
+
+    Measured on one Medford sweep of "defender 110" (1,736 cards, 60 scrolls):
+    holding the exclude terms out moved the stop from scroll 35 to 37. It costs
+    two scrolls in the ordinary case, and it stops a heavy exclude list from
+    ending a city in the first handful."""
     if card.get("outside"):
         return False
     title, price, _loc, _miles, lines = parse_card_text(card.get("text", ""))
@@ -256,5 +322,5 @@ def card_may_keep(card, tokens, exclude=(), min_price=None, max_price=None):
     r = {"source_section": "unknown", "title": title, "price": price,
          "raw_text": raw,
          "matches_query": "yes" if matches_query(tokens, title, raw) else "no"}
-    ok, _why = keep_row(r, exclude, min_price, max_price)
+    ok, _why = keep_row(r, (), min_price, max_price)
     return ok

@@ -57,32 +57,52 @@ if [ ! -x "$VPY" ]; then
         stop "Could not create the .venv folder. Is this folder read-only?"
 fi
 
-# --- 3. Install dependencies, but only when they change ----------------------
-# The stamp file is a copy of requirements.txt, so editing that file is what
-# triggers a reinstall.
-if ! cmp -s requirements.txt .venv/.installed; then
-    say "Installing the browser automation library..."
-    "$VPY" -m pip install --quiet --upgrade pip >/dev/null 2>&1
-    "$VPY" -m pip install --quiet -r requirements.txt ||
-        stop "Install failed. Check your internet connection and try again."
-    cp requirements.txt .venv/.installed
-    # A new Playwright pins a new Chromium build, so re-check the browser too.
-    rm -f .venv/.browser-installed
-fi
+# --- 3 to 5. Install what's needed, then go, and again after an update -------
+# The app can replace its own files while it's running. When it does, it exits
+# with RELAUNCH instead of finishing, and everything from here runs a second
+# time: the new version is only actually loaded by starting Python again, and it
+# may want a library the old requirements.txt never listed.
+#
+# Safe to have the loop here even though this file is one of the ones an update
+# replaces. Bash has already read this whole loop into memory, and the new file
+# arrives as a rename, which leaves the copy bash is reading untouched.
+RELAUNCH=75
 
-# --- 4. Download the browser Playwright drives -------------------------------
-if [ ! -f .venv/.browser-installed ]; then
-    say "Downloading the browser it drives (about 150 MB, one time only)..."
-    "$VPY" -m playwright install chromium ||
-        stop "Browser download failed. Check your internet connection and try again."
-    : > .venv/.browser-installed
-fi
+while :; do
+    # --- 3. Install dependencies, but only when they change ------------------
+    # The stamp file is a copy of requirements.txt, so editing that file is what
+    # triggers a reinstall.
+    if ! cmp -s requirements.txt .venv/.installed; then
+        say "Installing the browser automation library..."
+        "$VPY" -m pip install --quiet --upgrade pip >/dev/null 2>&1
+        "$VPY" -m pip install --quiet -r requirements.txt ||
+            stop "Install failed. Check your internet connection and try again."
+        cp requirements.txt .venv/.installed
+        # A new Playwright pins a new Chromium build, so re-check the browser too.
+        rm -f .venv/.browser-installed
+    fi
 
-# --- 5. Go ------------------------------------------------------------------
-# PYTHONUTF8 keeps accented characters in listing titles from tripping up
-# output on any machine, whatever its regional settings.
-PYTHONUTF8=1 "$VPY" src/fb_marketplace_sweep.py "$@"
-status=$?
+    # --- 4. Download the browser Playwright drives ---------------------------
+    if [ ! -f .venv/.browser-installed ]; then
+        say "Downloading the browser it drives (about 150 MB, one time only)..."
+        "$VPY" -m playwright install chromium ||
+            stop "Browser download failed. Check your internet connection and try again."
+        : > .venv/.browser-installed
+    fi
+
+    # --- 5. Go ---------------------------------------------------------------
+    # PYTHONUTF8 keeps accented characters in listing titles from tripping up
+    # output on any machine, whatever its regional settings. FACEPLACE_RELAUNCH
+    # is how the app knows a restart is on offer at all — without it, it tells
+    # the person to start the app again instead of promising to do it for them.
+    PYTHONUTF8=1 FACEPLACE_RELAUNCH="$RELAUNCH" "$VPY" src/fb_marketplace_sweep.py "$@"
+    status=$?
+
+    [ "$status" -eq "$RELAUNCH" ] || break
+    say ""
+    say "Starting again on the new version..."
+    say ""
+done
 
 say ""
 if [ "$status" -ne 0 ]; then

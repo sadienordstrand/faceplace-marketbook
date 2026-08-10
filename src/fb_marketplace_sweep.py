@@ -37,15 +37,16 @@ from playwright.sync_api import sync_playwright
 import locations
 import paths
 import storage
+import updater
 from browser import (SessionExpired, ensure_logged_in, fmt_dur, goto_with_retry,
                      human_pause, keep_awake, launch_context)
 from descriptions import (DEFAULT_DESCRIPTIONS_BUDGET_MIN, DEFAULT_PACE, PACES,
                           PAGE_WORK_SECONDS, PHOTO_SAVE_SECONDS,
                           confirm_description_count, fetch_thumbs,
                           retrieve_descriptions)
-from listings import (ITEM_RE, SCRIPT_JSON_JS, build_rows, card_may_keep,
-                      extract_json_listings, keep_row, query_numbers,
-                      query_tokens, relevance)
+from listings import (EARLIEST_YEAR, ITEM_RE, SCRIPT_JSON_JS, build_rows,
+                      card_may_keep, extract_json_listings, keep_row,
+                      latest_year, query_numbers, query_tokens, relevance)
 
 # Where downloaded photos go inside a run folder.
 THUMBS_DIRNAME = "thumbnails"
@@ -336,7 +337,8 @@ def collect_city(page, max_scrolls, is_keeper=None, patience=4,
 def run(query, scrolls, exact, out_csv=None, only=None, keep_all=False,
         debug_dump=False, match=None, limit=None, thumbs_dir=THUMBS_DIRNAME,
         do_descriptions=True, do_thumbs=True, do_gallery=True, pace=DEFAULT_PACE,
-        exclude=(), min_price=None, max_price=None, descriptions_budget=DEFAULT_DESCRIPTIONS_BUDGET_MIN,
+        exclude=(), min_price=None, max_price=None, min_year=None, max_year=None,
+        include_no_year=True, descriptions_budget=DEFAULT_DESCRIPTIONS_BUDGET_MIN,
         assume_yes=False, only_labels=None, open_gallery=True, no_pause=False,
         run_dir=None, previous_rows=None, describe_new_only=False, verifier=None,
         login_wait=None, unattended=False):
@@ -393,6 +395,10 @@ def run(query, scrolls, exact, out_csv=None, only=None, keep_all=False,
     if min_price is not None or max_price is not None:
         print(f"Price filter: {min_price if min_price is not None else 'any'} - "
               f"{max_price if max_price is not None else 'any'}")
+    if min_year is not None or max_year is not None:
+        print(f"Year filter: {min_year if min_year is not None else 'any'} - "
+              f"{max_year if max_year is not None else 'any'}"
+              + ("" if include_no_year else ", excluding listings with no year"))
     all_rows, dropped_total = {}, 0
     city_stats, drop_reasons, radius_km = {}, {}, None
     unknown_cities = []
@@ -450,7 +456,7 @@ def run(query, scrolls, exact, out_csv=None, only=None, keep_all=False,
             # --keep-all wants the unfiltered tail, so it falls back to the
             # "no new cards at all" stop instead of the keeper-aware one.
             probe = None if keep_all else (
-                lambda c: card_may_keep(c, tokens, exclude, min_price, max_price))
+                lambda c: card_may_keep(c, tokens, min_price, max_price))
             scroll_started = time.time()
             cards, divider_seen, _dtext, cstats = collect_city(
                 page, scrolls, probe, verbose=True)
@@ -470,7 +476,8 @@ def run(query, scrolls, exact, out_csv=None, only=None, keep_all=False,
             rows = build_rows(cards, divider_seen, json_listings, label, query, tokens)
             kept = {}
             for iid, r in rows.items():
-                ok, why = keep_row(r, exclude, min_price, max_price)
+                ok, why = keep_row(r, exclude, min_price, max_price,
+                                   min_year, max_year, include_no_year)
                 if keep_all or ok:
                     kept[iid] = r
                 else:
@@ -638,6 +645,8 @@ def run(query, scrolls, exact, out_csv=None, only=None, keep_all=False,
             "settings": {
                 "exact": exact, "scrolls": scrolls, "pace": pace,
                 "min_price": min_price, "max_price": max_price,
+                "min_year": min_year, "max_year": max_year,
+                "include_no_year": include_no_year,
                 "exclude": list(exclude), "keep_all": keep_all,
                 "match": match, "limit": limit,
                 "stages": stages,
@@ -828,6 +837,20 @@ def set_radius():
         ctx.close()
 
 
+def why_wait(e):
+    """What to say when the run lock is already held.
+
+    Usually it's another sweep, and the reason is the shared Facebook session.
+    An update takes the same lock for a very different reason, so the sentence
+    explaining it has to know which one it's looking at.
+    """
+    if (getattr(e, "holder", None) or {}).get("what") == "an update":
+        return ("An update is replacing this app's files, so nothing can start "
+                "until it's finished. That only takes a minute.")
+    return ("Both runs would need the same Facebook session, so wait for that "
+            "one to finish.")
+
+
 def run_from_ui(a):
     """Collect settings from the pre-flight window, then run with them.
     Command-line values seed the form, so --query x --ui opens it pre-filled."""
@@ -851,9 +874,11 @@ def run_from_ui(a):
          "descriptions_budget": a.descriptions_budget},
         on_add=ui_add_city, on_remove=ui_remove_city,
         builtins=list(locations.base_locations()),
-        # Two unrelated sets of hooks: the saved searches and email tabs, and
-        # the offer of a desktop shortcut on a launch that hasn't one yet.
-        hooks={**scheduling.ui_hooks(), **make_desktop_icon.ui_hooks()})
+        # Three unrelated sets of hooks: the saved searches and email tabs, the
+        # offer of a desktop shortcut on a launch that hasn't one yet, and the
+        # offer of a newer version when this copy is behind the repository.
+        hooks={**scheduling.ui_hooks(), **make_desktop_icon.ui_hooks(),
+               **updater.ui_hooks()})
     if not cfg:
         print("Cancelled — nothing was run.")
         return
@@ -862,6 +887,17 @@ def run_from_ui(a):
     if cfg.get("action") == "run_saved":
         scheduling.tick(force=cfg["id"])
         return
+    # The code on disk is newer than the code this process loaded, so there's
+    # nothing safe left to do here. Exiting with the launcher's code is what
+    # gets the app started again on the version that was just installed.
+    if cfg.get("action") == "updated":
+        again = updater.relaunch_code()
+        if again is None:
+            print("Updated. Start Faceplace Marketbook again to use the new "
+                  "version.")
+            return
+        print("Updated. Restarting on the new version...")
+        raise SystemExit(again)
     print(f"\nStarting: query '{cfg['query']}', {len(cfg['cities'])} "
           f"cit{'y' if len(cfg['cities']) == 1 else 'ies'}.")
     try:
@@ -873,12 +909,13 @@ def run_from_ui(a):
                 do_gallery=cfg["do_gallery"], pace=cfg["pace"],
                 exclude=[t.strip() for t in cfg["exclude"].split(",") if t.strip()],
                 min_price=cfg["min_price"], max_price=cfg["max_price"],
+                min_year=cfg["min_year"], max_year=cfg["max_year"],
+                include_no_year=cfg["include_no_year"],
                 descriptions_budget=cfg["descriptions_budget"], assume_yes=a.yes,
                 only_labels=cfg["cities"], open_gallery=not a.no_open,
                 no_pause=a.no_pause)
     except scheduling.AlreadyRunning as e:
-        print(f"\nNot starting: {e}.\nBoth runs would need the same Facebook "
-              f"session, so wait for that one to finish.")
+        print(f"\nNot starting: {e}.\n{why_wait(e)}")
 
 
 def main():
@@ -898,12 +935,21 @@ def main():
     ap.add_argument("--out", metavar="CSV",
                     help="explicit CSV path; skips the per-run runs/<query>_<date>/ folder")
     ap.add_argument("--exclude", metavar="TERMS", default="",
-                    help="comma-separated terms to reject, matched ignoring spaces "
-                         "and punctuation so 'can am' also kills 'Can-Am' and 'CANAM'")
+                    help="comma-separated terms to reject, matched at word starts "
+                         "ignoring case and punctuation, so 'can am' also kills "
+                         "'Can-Am' and 'CAN AM' (but not 'canam'), and 'fender' "
+                         "spares 'Defender'")
     ap.add_argument("--min-price", type=int, metavar="N",
                     help="drop listings under N dollars (also sent to Facebook)")
     ap.add_argument("--max-price", type=int, metavar="N",
                     help="drop listings over N dollars (also sent to Facebook)")
+    ap.add_argument("--min-year", type=int, metavar="Y",
+                    help="drop listings whose title year is before Y")
+    ap.add_argument("--max-year", type=int, metavar="Y",
+                    help="drop listings whose title year is after Y")
+    ap.add_argument("--exclude-no-year", action="store_true",
+                    help="with a year bound set, also drop listings whose title "
+                         "has no year in it at all")
     ap.add_argument("--descriptions-budget", type=int, metavar="MIN",
                     default=DEFAULT_DESCRIPTIONS_BUDGET_MIN,
                     help="ask before retrieving descriptions would take longer "
@@ -955,6 +1001,23 @@ def main():
     ap.add_argument("--download-thumbs", metavar="CSV",
                     help="one-off: download the image URLs in an existing CSV")
     a = ap.parse_args()
+    # A range that can't match anything fails here rather than an hour later, as
+    # a sweep that scrolled every city and came back with nothing.
+    for flag, val in (("--min-price", a.min_price), ("--max-price", a.max_price)):
+        if val is not None and val < 0:
+            ap.error(f"{flag} can't be negative")
+    if None not in (a.min_price, a.max_price) and a.min_price > a.max_price:
+        ap.error("--min-price is higher than --max-price")
+    for flag, val in (("--min-year", a.min_year), ("--max-year", a.max_year)):
+        if val is not None and not EARLIEST_YEAR <= val <= latest_year():
+            ap.error(f"{flag} has to be between {EARLIEST_YEAR} and {latest_year()}")
+    if None not in (a.min_year, a.max_year) and a.min_year > a.max_year:
+        ap.error("--min-year is later than --max-year")
+    # One line, and only when there's something to say. The settings window
+    # makes the same offer with a button beside it; this is for the runs that
+    # never open one. Both read the same answer, which is fetched once per
+    # launch, so having it here costs the window nothing.
+    updater.announce()
     exclude = [t.strip() for t in a.exclude.split(",") if t.strip()]
     if a.import_urls:
         locations.import_urls(a.import_urls)
@@ -987,12 +1050,12 @@ def main():
                     do_descriptions=not a.no_descriptions, do_thumbs=not a.no_thumbs,
                     do_gallery=not a.no_gallery, pace=a.pace, exclude=exclude,
                     min_price=a.min_price, max_price=a.max_price,
+                    min_year=a.min_year, max_year=a.max_year,
+                    include_no_year=not a.exclude_no_year,
                     descriptions_budget=a.descriptions_budget, assume_yes=a.yes,
                     open_gallery=not a.no_open, no_pause=a.no_pause)
         except scheduling.AlreadyRunning as e:
-            raise SystemExit(
-                f"Not starting: {e}.\nBoth runs would need the same Facebook "
-                f"session, so wait for that one to finish.")
+            raise SystemExit(f"Not starting: {e}.\n{why_wait(e)}")
 
 
 if __name__ == "__main__":

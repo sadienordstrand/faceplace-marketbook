@@ -40,6 +40,7 @@ from pathlib import Path
 
 import browser
 import descriptions
+import listings
 import paths
 import storage
 
@@ -220,6 +221,9 @@ DEFAULT_SEARCH = {
     "exact": False,
     "min_price": None,
     "max_price": None,
+    "min_year": None,
+    "max_year": None,
+    "include_no_year": True,
     "exclude": "",
     "do_descriptions": True,
     "do_thumbs": True,
@@ -275,6 +279,27 @@ def find_search(searches, ref):
     return None
 
 
+def validate_bounds(search):
+    """The price and year ranges, checked the same way the settings window
+    checks them. The window can't be the only guard: a saved search also arrives
+    from a hand-edited saved_searches.json, and a range that can't match
+    anything runs for just as long as a good one before returning nothing."""
+    lo_p, hi_p = search.get("min_price"), search.get("max_price")
+    for label, val in (("Minimum", lo_p), ("Maximum", hi_p)):
+        if val is not None and val < 0:
+            return f"{label} price can't be negative."
+    if lo_p is not None and hi_p is not None and lo_p > hi_p:
+        return "The minimum price is higher than the maximum price."
+    lo_y, hi_y = search.get("min_year"), search.get("max_year")
+    latest = listings.latest_year()
+    for val in (lo_y, hi_y):
+        if val is not None and not listings.EARLIEST_YEAR <= val <= latest:
+            return f"Years have to be between {listings.EARLIEST_YEAR} and {latest}."
+    if lo_y is not None and hi_y is not None and lo_y > hi_y:
+        return "The minimum year is later than the maximum year."
+    return None
+
+
 def validate_search(search, searches, editing_id=None):
     name = (search.get("name") or "").strip()
     if not name:
@@ -286,6 +311,9 @@ def validate_search(search, searches, editing_id=None):
     for s in searches:
         if s.get("id") != editing_id and (s.get("name") or "").lower() == name.lower():
             return f"You already have a saved search called '{name}'."
+    err = validate_bounds(search)
+    if err:
+        return err
     iv = search.get("interval") or {}
     if iv.get("unit") not in UNITS:
         return f"Interval unit must be one of: {', '.join(UNITS)}."
@@ -1298,6 +1326,8 @@ def run_saved_search(search, email_cfg=None, sweep=None, send=True, now=None,
             exclude=[t.strip() for t in (search.get("exclude") or "").split(",")
                      if t.strip()],
             min_price=search.get("min_price"), max_price=search.get("max_price"),
+            min_year=search.get("min_year"), max_year=search.get("max_year"),
+            include_no_year=search.get("include_no_year", True),
             limit=search.get("limit"), assume_yes=True,
             only_labels=search.get("cities"), open_gallery=False, no_pause=True,
             run_dir=run_dir, previous_rows=prev_rows, describe_new_only=True,
@@ -1791,7 +1821,8 @@ def schedule_problems():
 # Only these come from the search form. Anything else the form collects
 # (debug_dump, do_gallery, the budget prompt) is about one interactive run and
 # has no meaning for something that runs unattended at 5am.
-SAVED_FIELDS = ("query", "cities", "exact", "min_price", "max_price", "exclude",
+SAVED_FIELDS = ("query", "cities", "exact", "min_price", "max_price",
+                "min_year", "max_year", "include_no_year", "exclude",
                 "do_descriptions", "do_thumbs", "pace", "limit", "interval",
                 "email_to", "name", "enabled")
 

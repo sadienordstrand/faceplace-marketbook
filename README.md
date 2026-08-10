@@ -38,6 +38,7 @@ Works on Windows and Mac.
   - [What the emails look like](#what-the-emails-look-like)
   - [Where scheduled results live](#where-scheduled-results-live)
   - [Turning it off](#turning-it-off)
+- [**Keeping it up to date**](#keeping-it-up-to-date)
 - [**Troubleshooting**](#troubleshooting)
 - [**For the technically inclined**](#for-the-technically-inclined)
 
@@ -245,8 +246,8 @@ explanation underneath it in the window itself; this is just a brief overview:
 - **Cities** — each selected city searches out to your account's radius around
   itself, up to 500 miles. Select all of them, at 500 miles, to cover the
   continental US. You can add your own cities too; see below.
-- **Price range** and **Exclude terms** — the two most effective ways to cut
-  junk. See below.
+- **Price range**, **Year range**, and **Exclude terms** — the most effective
+  ways to cut junk. See below.
 - **Stages** — whether to collect descriptions, download photos, and build the
   gallery. All three on is the normal choice.
 - **Description retrieval** — the pace, and an optional cap on how many listings
@@ -263,10 +264,12 @@ title at all.** Two settings help clean that up:
 
 **Exclude terms**: If you're looking for a certain car, you might put "hot
 wheels" and "lego" in the excluded terms to avoid cluttering your search results
-with toys that share the name of that car. Punctuation and spacing are ignored,
-so `can am` also catches "Can-Am" and "CANAM".
+with toys that share the name of that car. Capitalization and punctuation are
+ignored, so `can am` also catches "Can-Am" and "CAN AM", but not "canam". Terms 
+match at the start of a word, so `fender` catches "fender flares" but not "Defender".
 
-**A minimum/maximum price** can also narrow the results considerably.
+**A minimum/maximum price** can also narrow the results considerably, and 
+**minimum/maximum year** narrows it to the model years you're looking for.
 
 **Leave "Exact matching" off.** It has a tendency to exclude some legitimate
 results, and doesn't provide much benefit besides making your search a bit
@@ -549,6 +552,14 @@ Scheduled searches write to `runs/saved/<your search name>/` and **rewrite that
 same folder every run**, so the folder always holds the current picture rather
 than one folder per run. Previous reports are kept in a `history/` folder inside
 it.
+
+---
+
+## Keeping it up to date
+
+You don't need to re-download the code when the app changes. Every time you
+start it, it checks whether there's a newer version, and prompts you to
+update if needed.
 
 ---
 

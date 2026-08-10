@@ -46,17 +46,22 @@ Alongside them:
 - `build_gallery.py`
 - `scheduling.py`
 - `make_desktop_icon.py`
+- `updater.py` and `version.py`
 - `paths.py`
 - `ui/`
   - `settings.html`, `settings.css`, and `settings.js`
+  - `update.html`, `update.css`, and `update.js`
   - `gallery.html`
   - `tokens.css`
   - `faceplace_marketbook_icon.svg`
 
 The launchers find Python, build `.venv`, install requirements, fetch Chromium
-and run the app, stamping each step so repeat runs skip through. *Log into
-Facebook* is the same launcher with `--login`, which shuts Chromium down cleanly
-and so writes the new session to the profile.
+and run the app, stamping each step so repeat runs skip through. Everything from
+the requirements check onwards is a loop, so an app that has just updated itself
+can ask to be started again on the new files — see [Updating a copy that was
+never cloned](#updating-a-copy-that-was-never-cloned). *Log into Facebook* is the
+same launcher with `--login`, which shuts Chromium down cleanly and so writes the
+new session to the profile.
 
 ### Files the app writes
 
@@ -72,6 +77,8 @@ place these are named.
 | `saved_searches.json` | Saved searches and their schedules. |
 | `email_config.json` | SMTP address and app password. Must stay out of version control. |
 | `shortcuts.json` | Which shortcuts exist, and whether the offer was waved away. |
+| `update.json` | When the repository was last asked for its version, what it said, and any version waved away. |
+| `update/` | Scratch space for an update in progress. Empty at rest. |
 | `schedule/`, `debug/` | The run lock and tick log; `--debug-dump` output. |
 
 Two things live outside it. `runs/` holds one folder per run, git-ignored but
@@ -102,12 +109,17 @@ python3 -m venv .venv
 point, `src/scheduling.py`: `--tick` (what launchd and Task Scheduler call: every
 due search in creation order, under one lock), `--list`, `--run NAME`,
 `--install`, `--uninstall`, `--test-email`, `--no-email`, and `--verify-probe`.
+So does the updater, `src/updater.py`: no arguments reports whether a newer
+version exists, `--update` installs it. See [Updating a copy that was never
+cloned](#updating-a-copy-that-was-never-cloned).
 
 | Flag | Description |
 | --- | --- |
 | `--query TEXT` | Search query. Without it (and without `--no-ui`) the window opens. |
 | `--exclude TERMS` | Comma-separated terms to reject, ignoring case, spaces, and punctuation. |
 | `--min-price N` / `--max-price N` | Price bounds, applied server-side and locally. |
+| `--min-year Y` / `--max-year Y` | Model-year bounds, read from the listing title. Local only. |
+| `--exclude-no-year` | With a year bound set, also drop titles with no year in them. |
 | `--only LABEL` | Run only locations whose label contains `LABEL`. |
 | `--import-urls FILE` | Parse pasted search URLs into `locations.json`. |
 | `--out CSV` | Explicit CSV path; skips the per-run `runs/<query>_<date>/` folder. |
@@ -156,12 +168,26 @@ run `--debug-dump` and inspect the saved payloads.
 In order of how much junk they remove:
 
 - **`--exclude`** is the big one when the search term is an overloaded brand name.
-  Terms match with punctuation and spaces ignored, so one `can am` entry catches
-  "Can-Am", "Can Am", and "CANAM". On a real "defender 110" sweep this alone cut
-  4,698 listings to 1,925, nearly all of it Can-Am UTVs.
+  A term's words have to appear in order, each at the start of a word, separated
+  by at least one space or punctuation mark: `can am` catches "Can-Am", "CAN AM"
+  and "Can-Ams", but not "canam", and `fender` catches "fender flares" without
+  matching the "fender" inside "Defender". On a real "defender 110" sweep this
+  alone cut 4,698 listings to 1,925, nearly all of it Can-Am UTVs.
+
+  The separator is what stops a term from disappearing inside a longer word, and
+  it costs a little coverage: of 1,736 cards in one Medford sweep, 9 were spelled
+  "Canam" or "CanAm" and need that as its own term. The alternative — matching on
+  the letters alone — is what made `fender` match all 267 Land Rovers in that
+  same feed.
 - **`--min-price` / `--max-price`** are sent to Facebook in the URL *and* applied
   locally. A price floor removes the parts that legitimately say "Defender 110":
   shocks, doors, a $75 window, a $1 transmission. Took that same sweep to 811.
+- **`--min-year` / `--max-year`** read the model year out of the title, the same
+  way the gallery does for its year sort: the first 4-digit number that could be
+  a year, bounded to 1900..next year so a trim or part number can't pose as one.
+  Sellers who omit it are kept unless `--exclude-no-year` says otherwise, and
+  that switch only takes effect alongside a bound — on its own it would discard
+  every listing whose seller just wrote "Land Rover Defender".
 - **Query words** are required by default: 3+ letter words, matched at word
   starts, so "defender" catches "Defenders" but "van" won't match "advantage".
 - **Numbers in the query rank rather than filter**, since sellers often omit them.
@@ -199,6 +225,31 @@ passing. The in-loop test is deliberately generous — a card whose text hasn't
 rendered yet counts as a match — so a slow-loading page can't cut a city short.
 Each city reports where it stopped and why, and `run.json` records it under
 `per_city`.
+
+Two filters are held out of that in-loop test: the **exclude terms** and the
+**year bounds**. Both narrow a feed Facebook is still ordering by its own
+relevance, and a run of excluded or wrong-year cards says nothing about whether
+the listings being looked for have run out — fold them in and three scrolls of
+2004s, or of Can-Ams, would end a city while the ones asked for were still
+further down. Price stays in, because Facebook applies price server-side as well,
+so a priced-out listing largely never arrives to be counted.
+
+Measured on one Medford sweep of "defender 110" — 1,736 cards over the full
+60-scroll ceiling, with every card's probe result recorded at the scroll it
+appeared on, so both rules could be replayed against the identical feed:
+
+| exclude terms in the probe | stops at | listings recovered by removing it |
+| --- | --- | --- |
+| `can am` (25% of matching cards) | scroll 35 vs 37 | 0 |
+| half of matching cards removed | scroll 34 vs 37 | ~0 |
+| three quarters removed | scroll 28 vs 37 | ~6 of 67 |
+| nine tenths removed | scroll 15 vs 37 | ~9 of 28 |
+
+So it costs two scrolls in the ordinary case and buys nothing there; the reason
+to hold exclude out is the bottom of that table, where a heavy exclude list would
+otherwise end a city in the first handful of scrolls. Filtering by year or by
+exclude terms therefore costs a little extra scrolling, and the results are the
+reason to spend it.
 
 Retrieving descriptions is the other slow stage, and most of *its* cost is a
 deliberate randomized pause between detail-page hits — the one knob that trades
@@ -387,6 +438,111 @@ of `~/Documents` needs no password, while granting Full Disk Access leaves the
 folder where it is. The advice names the exact interpreter path, since a venv
 Python is not something anyone will find in that list by browsing.
 
+## Updating a copy that was never cloned
+
+Almost nobody who runs this cloned it. They clicked Download ZIP, so there's no
+git in the folder to pull with, and re-downloading would strand the login, the
+saved searches, the database and any shortcut pointing at the old folder.
+`updater.py` does the same job in place instead.
+
+The version lives in `src/version.py` as `__version__`, and the check reads that
+same file straight out of the repository over `raw.githubusercontent.com`.
+Deliberately not a release or a tag: bumping one line and pushing it is then the
+whole release process, and there's no second place to remember to update. The
+cost is a CDN that holds the old copy for a few minutes after a push, so a
+version bumped a moment ago isn't visible quite yet.
+
+It asks on every launch rather than on a timer, and it asks before the window
+opens. The notice most worth showing is the one about an update whose author has
+just told someone to go and get it, and a cached answer can't carry that news —
+so a rule like "at most once a day" is wrong exactly when it matters. The price
+is that the check sits in front of the window: about a third of a second on a
+working connection, and `CHECK_TIMEOUT` on a broken one, after which it says
+nothing. That's a fair trade here, because a machine that can't reach GitHub in
+two seconds is about to have a much harder time driving Facebook.
+
+Asking every launch means asking *once* per launch. A run that prints the
+terminal notice and then opens the window would otherwise pay for two lookups
+and two timeouts, so the answer is memoised in the process for both to read.
+`.state/update.json` keeps the last answer across launches, which is what lets
+the banner stay up on a machine that heard about an update yesterday and is
+offline today, along with any version that was waved away.
+
+Installing downloads the branch zip from `codeload.github.com`, unpacks it to a
+temp folder, and refuses to go on unless what came back has the files this
+project has — a captive-portal login page and a truncated download both arrive
+looking like a success otherwise. Only then is anything in the project folder
+touched.
+
+Four rules govern what happens next, and each exists for a reason worth keeping:
+
+- **Nothing under `.state/`, `runs/`, `.venv/` or `.git/` is read from the zip or
+  written to.** That's the whole reason updating in place beats re-downloading.
+- **Every file is installed as a rename**, not a write over the top. The shell is
+  part-way through reading the very launcher being replaced and holds the old
+  file open, so a rename leaves the running script intact where a truncate-and-
+  write would corrupt it mid-execution. A root-level file that won't budge —
+  Windows holding a launcher open — is left on the old version and reported,
+  rather than failing the whole update.
+- **Files about to be overwritten are copied aside first and put back if
+  anything raises.** Downloading and unpacking are free to fail; this part isn't,
+  so a full disk or a closed lid leaves the folder as it was rather than half of
+  each version. The copy is deleted on success and nobody is ever told it
+  existed — a backup a user has to restore by hand isn't a recovery plan.
+- **`src/` and `docs/` are pruned to match the zip**, so a module deleted upstream
+  doesn't linger where something might still import it. Nothing outside those two
+  folders is ever deleted, because the project root is where people keep things.
+
+The update also takes the same `run_lock` a sweep takes, and holds it throughout.
+A run that started an hour ago has most of the program loaded but not all of it —
+`build_gallery` is imported at the very end of `run()`, and `scheduling.py` does
+the same — so replacing the files underneath one would have a single sweep finish
+on a mixture of two versions, and pruning could delete a module it hasn't reached
+yet. The lock closes that from both directions: an update won't start while a
+sweep is going, and a scheduled sweep that comes due mid-update finds the lock
+held and skips, which is already what it does when a manual run is in the way.
+The lock is per project folder, so a second copy unpacked elsewhere is a separate
+install and unaffected.
+
+Installing doesn't put the running process on the new version. Python read the
+old modules into memory minutes ago and has no reason to read them again, so the
+app has to be started afresh — and it can't do that for itself, because it would
+have to survive its own replacement to reinstall the libraries a new version
+might need. Only the launcher is in a position to do it properly.
+
+So the launcher offers, and the app takes it up. The launcher sets
+`FACEPLACE_RELAUNCH` to an exit code it watches for, runs the app inside a loop,
+and on seeing that code goes back round through the dependency install and
+starts Python again. The app reads the variable through `relaunch_code()`: set
+means a restart can be promised, unset means the only honest thing to say is
+"start it again yourself". Unset is what an old launcher from before this
+existed looks like, and also a hand-typed `python src/fb_marketplace_sweep.py`
+and the scheduler, none of which are watching an exit code. Putting the number
+in the variable rather than agreeing one in advance keeps the two scripts from
+drifting apart on what it is.
+
+The two launchers get there differently, both times because of how the shell
+reads a file it may be part-way through when that file gets replaced. Bash has
+the whole loop in memory and holds the old inode open, so a `while` loop is
+safe. `cmd` tracks its place in a batch file by byte offset, so jumping to a
+label in one that changed underneath it would run whatever now sits at that
+position; the Windows launcher runs `"%~f0"` instead, which reads the new file
+from the top and never returns.
+
+Nothing anywhere branches on *how far* behind a copy is. Eleven versions back and
+one version back take the same path and read identically, because the difference
+isn't actionable — there's one thing to do either way.
+
+A folder with a `.git` in it is opted out entirely — that's a clone whose owner
+has git, and unpacking a zip over their working tree would throw away whatever
+they hadn't committed. `python src/updater.py` reports what's available and
+`--update` installs it, both refusing to run in a clone for the same reason.
+
+Once an update lands, the code on disk is newer than the code already running,
+and a lazily imported module would come off disk as the new version. So the
+window blocks itself behind a sheet whose only button closes it, rather than
+letting someone start a sweep on half of each version.
+
 ## Testing
 
 `tests/test_scheduling.py` covers the interval arithmetic including
@@ -397,7 +553,10 @@ would prove nothing about the case that matters. `run_saved_search()` takes an
 injectable `sweep`, so the whole pipeline is exercised without a browser.
 `tests/test_settings_ui.py` opens the actual settings window in headless Chromium
 and clicks through it with the real hooks; it's the only level that catches a
-mis-wired button or a window close racing a submit.
+mis-wired button or a window close racing a submit. `tests/test_updater.py`
+builds a throwaway project folder and a zip on the spot rather than touching the
+network, and the test that earns its keep is the one that kills an update part
+way through and asserts the folder is byte-for-byte what it was.
 
 Three things need a live check. **The unknown-city rule**, because the behaviour
 belongs to Facebook: a made-up segment should be skipped with the substitute

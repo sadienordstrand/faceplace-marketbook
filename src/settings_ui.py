@@ -49,17 +49,25 @@ def _call(hooks, name, default=None):
 
 
 def render(locations, paces, defaults, saved=(), email=None,
-           units=("hours", "days"), builtins=(), shortcut=None):
+           units=("hours", "days"), builtins=(), shortcut=None, update=None):
     defaults = dict(defaults or {})
     # 0 / None means "never ask", which the form shows as an empty field.
     budget = defaults.get("descriptions_budget") or ""
+    # The update banner is three files of its own rather than lines added to the
+    # three below, because it's a self-contained thing that either appears or
+    # doesn't. They're joined on rather than linked for the same reason as
+    # everything else here: the page is loaded with set_content() and has no
+    # base URL for an href to resolve against.
+    #
     # The script and stylesheet go in first, because the script is what carries
     # the data placeholders below. The data goes in last, so a search whose text
     # happens to look like a placeholder is never treated as one.
     return (_asset("settings.html")
-            .replace("__JS__", _asset("settings.js"))
+            .replace("__UPDATE_BAR__", _asset("update.html"))
+            .replace("__JS__", _asset("settings.js") + _asset("update.js"))
             .replace("__TOKENS__", _asset("tokens.css"))
-            .replace("__CSS__", _asset("settings.css"))
+            .replace("__CSS__", _asset("settings.css") + _asset("update.css"))
+            .replace("__UPDATE__", _json(update or {}))
             .replace("__SHORTCUT__", _json(shortcut or {"ask": False}))
             .replace("__FONTS__", FONTS)
             .replace("__BUDGET__", str(budget))
@@ -98,7 +106,8 @@ def collect_settings(locations, paces, defaults=None, headless=False,
                   email=_call(hooks, "email_config", default={}),
                   units=hooks.get("units") or ("hours", "days"),
                   builtins=builtins,
-                  shortcut=_call(hooks, "shortcut_offer"))
+                  shortcut=_call(hooks, "shortcut_offer"),
+                  update=_call(hooks, "update_offer"))
     state = {}
     known = list(locations)
 
@@ -168,7 +177,9 @@ def collect_settings(locations, paces, defaults=None, headless=False,
                 ("pySetSchedule", "set_schedule"),
                 ("pyAddShortcut", "add_shortcut"),
                 ("pyReopenShortcut", "shortcut_reopen"),
-                ("pyShortcutNever", "shortcut_never")):
+                ("pyShortcutNever", "shortcut_never"),
+                ("pyUpdateNow", "update_now"),
+                ("pyUpdateSkip", "update_skip")):
             page.expose_function(js_name, hook(hook_name))
         page.set_content(html)
         if on_ready:

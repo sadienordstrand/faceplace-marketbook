@@ -16,6 +16,7 @@ __CSS__</style>
   </div>
 </header>
 <main>
+__UPDATE_BAR__
 <div class="pane" id="paneNew">
   <section>
     <h2>Search</h2>
@@ -102,10 +103,25 @@ __CSS__</style>
       <label class="field"><span class="lab">Max price ($)</span>
         <input type="number" id="max_price" placeholder="any" min="0"></label>
     </div>
+    <div class="row">
+      <label class="field"><span class="lab">Min year</span>
+        <input type="number" id="min_year" placeholder="any"></label>
+      <label class="field"><span class="lab">Max year</span>
+        <input type="number" id="max_year" placeholder="any"></label>
+    </div>
+    <div class="toggles" style="margin-bottom: 16px">
+      <div class="tog" id="include_no_year" role="button" tabindex="0" aria-pressed="true">
+        <span class="box">✓</span>Include listings with no year
+      </div>
+    </div>
+    <div class="note bad" id="filterMsg" style="margin-bottom: 16px" hidden></div>
     <label class="field"><span class="lab">Exclude terms</span>
       <input type="text" id="exclude" placeholder="rhd, can am, hot wheels">
-      <div class="hint">Comma separated. Punctuation and spaces are ignored when
-        matching, so "can am" also catches "Can-Am" and "CANAM".</div>
+      <div class="hint">Comma separated. Capitalization and punctuation are
+        ignored, so "can am" also catches "Can-Am" and "CAN AM" — but not
+        "canam", which is a different word; add that separately if you want it.
+        Terms match at the start of a word, so "fender" won't take out every
+        "Defender".</div>
     </label>
   </section>
 

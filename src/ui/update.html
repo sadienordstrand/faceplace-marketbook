@@ -1,0 +1,29 @@
+<section id="updateBar" class="update" hidden>
+  <div class="updrow">
+    <div>
+      <div class="updlead" id="updLead"></div>
+      <div class="hint" id="updText"></div>
+    </div>
+    <div class="updacts" id="updActs">
+      <button class="mini" id="updSkip">Not now</button>
+      <button class="mini" id="updGo">Update now</button>
+    </div>
+  </div>
+  <div class="note" id="updMsg" hidden></div>
+</section>
+
+<!-- Shown once an update has landed. It blocks the window on purpose: the code
+     on disk is now newer than the code already running in memory, and starting
+     a sweep from here would run half of each. -->
+<div class="scrim" id="updateDone" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="updateDoneTitle">
+    <h2 id="updateDoneTitle">Update installed</h2>
+    <div class="hint" id="updateDoneText"></div>
+    <div class="sheet-foot">
+      <span></span>
+      <div class="actions">
+        <button class="go" id="updateDoneClose">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
