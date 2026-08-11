@@ -158,11 +158,58 @@ Closing the window, or pressing Cancel, is how the app is quit — nothing is
 running and nothing is half-finished at that point, so there is nothing left to
 stay open for. It exits with `CLOSED_EXIT` (76), which the launchers read as
 "nothing in this terminal is worth reading" and skip their *press Return to close
-this window* on, so quitting the app doesn't leave a terminal behind to be
-dismissed as well. (Whether the terminal window itself disappears is your
-terminal's own setting — on macOS, Terminal ▸ Settings ▸ Profiles ▸ Shell ▸ *When
-the shell exits*.) The other exit code the launchers watch for is 75, which asks
-to be started again on a version the app has just installed over itself.
+this window* on. The other exit code the launchers watch for is 75, which asks to
+be started again on a version the app has just installed over itself.
+
+On Windows that's the end of it: a batch file that finishes takes its console
+window with it. On a Mac it isn't, and this is the part worth knowing. Terminal
+decides for itself what to do with a window whose shell has exited, and out of the
+box it decides to keep it — leaving `[Process completed]` sitting there. So no
+exit code can close that window, and quitting the app five times leaves five dead
+windows to clear up by hand. The setting behind it (Terminal ▸ Settings ▸ Profiles
+▸ Shell ▸ *When the shell exits*) belongs to whoever owns the Mac and isn't the
+app's to change, so `close_this_window` in the Mac launcher asks Terminal to close
+the window instead.
+
+**The timing is the whole difficulty**, and asking directly does not work.
+Terminal won't close a window quietly while anything is still running in it: it
+puts up *do you want to terminate running processes in this window?* and waits to
+be answered, which is a worse imposition than the dead window it was meant to
+save. And at the moment the launcher would ask, plenty is still running — the
+launcher's own `bash`, the `osascript` doing the asking, and whatever of Chromium
+hasn't finished shutting down. (Terminal's own account of a live window reads
+`login`, `zsh`, `bash`, `osascript`; everything past `zsh` is what it warns
+about.) Asking and then exiting immediately *sometimes* gets away with it, which is
+the worst of both worlds: it depends on winning a race against Terminal handling
+the event.
+
+So the asking is handed to a process built to outlive the launcher:
+
+- **It detaches into a session of its own** (`fork`, then `setsid`). That is the
+  load-bearing step — a process with no controlling terminal is not one of the
+  ones Terminal counts, so the asker can't be the reason for the warning.
+- **It waits for the terminal to empty**, polling `ps -t`, and only then asks. By
+  then there is nothing left to warn about and the window goes without a word. It
+  gives up waiting after thirty seconds and asks anyway, since by then whatever is
+  holding the terminal is not going to finish.
+- **`nohup`, not a bare `&`.** The hangup that goes out when the window's shell
+  exits would otherwise kill the waiting process before it had ignored anything.
+
+Two limits are deliberate. The window is found **by its terminal device**, because
+someone's other Terminal windows must be left alone. And it is closed **only when
+it holds a single tab** — Terminal can close a window but has no way to close one
+tab of it, and a launch that landed in a tab beside other work must not take that
+work down with it. A dead tab left behind is a far smaller harm than a search in
+the next tab being killed off.
+
+The whole thing only runs when `TERM_PROGRAM` is `Apple_Terminal`, which is what a
+double-click gives you. From iTerm, an ssh session or a shell inside an editor the
+same request would be one program driving another, and macOS puts a permission
+dialog in front of that; under Terminal it is Terminal being asked about itself,
+so there is nothing to permit and nothing is ever prompted for.
+
+Only on the quit path. An ending with an error keeps its window and its *press
+Return*, because the whole point of that window is the messages in it.
 
 "Run now" on a scheduled search comes back to the window too, but with no gallery:
 those results go out by email, and the run itself is `scheduling.tick(force=...)`,

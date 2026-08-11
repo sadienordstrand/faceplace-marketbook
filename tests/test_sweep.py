@@ -534,6 +534,63 @@ class TestTheAppWindow(Patched):
         self.assertEqual(self.events, ["window", "search", "window", "gallery"])
 
 
+class TestQuittingLeavesNothingBehind(unittest.TestCase):
+    """The handshake between quitting the app and the launcher that started it.
+
+    Quitting is worth nothing if the terminal window it ran in stays on screen:
+    quit five times and there are five dead windows to clear up by hand. The exit
+    code is how the app says which kind of ending this was, and it's a bare
+    number written out in three files — so the only thing that can go wrong is
+    them disagreeing, and that's what this pins down.
+    """
+
+    def launcher(self, name):
+        return (Path(fb.__file__).resolve().parent.parent / name).read_text(
+            encoding="utf-8")
+
+    def test_both_launchers_watch_for_the_code_the_app_actually_exits_with(self):
+        self.assertIn(f"CLOSED={fb.CLOSED_EXIT}",
+                      self.launcher("Start Faceplace Marketbook (Mac).command"))
+        self.assertIn(f'"%STATUS%"=="{fb.CLOSED_EXIT}"',
+                      self.launcher("Start Faceplace Marketbook (Windows).bat"))
+
+    def test_the_mac_launcher_closes_its_window_rather_than_just_exiting(self):
+        # Exiting isn't enough on a Mac. Terminal decides for itself what to do
+        # with a window whose shell has finished, and left alone it keeps it,
+        # showing "[Process completed]" — so the window has to be closed by
+        # asking Terminal to close it.
+        script = self.launcher("Start Faceplace Marketbook (Mac).command")
+        self.assertIn("close_this_window", script)
+        # Only ever under Terminal. Anywhere else that would be one program
+        # driving another, which macOS puts up a permission dialog for.
+        self.assertIn('"$TERM_PROGRAM" = "Apple_Terminal"', script)
+        # And only the window this script is running in, matched by its terminal
+        # device. Someone's other Terminal windows are none of its business.
+        self.assertIn("tty of item 1 of panes", script)
+
+    def test_the_asking_waits_until_nothing_is_left_in_the_window(self):
+        # The failure this is here to prevent: asking while this script, the
+        # osascript and the last of Chromium are still on the terminal, which
+        # gets "do you want to terminate running processes in this window?" put
+        # up and left waiting for an answer. Which is worse than the dead window
+        # it was meant to save. So the asking is detached into a session of its
+        # own — that is what takes it out of the count Terminal makes — and holds
+        # off until the terminal has emptied.
+        script = self.launcher("Start Faceplace Marketbook (Mac).command")
+        self.assertIn("os.setsid()", script)
+        self.assertIn('"ps", "-t", terminal', script)
+        # nohup rather than a bare &, or the hangup sent when the window's shell
+        # goes would take the waiting process with it.
+        self.assertIn("nohup", script)
+
+    def test_a_launch_sharing_a_window_with_other_tabs_closes_nothing(self):
+        # Terminal can close a window but has no way to close one tab of it, and
+        # someone else's tab may be running a search. A dead tab left behind is
+        # the smaller harm by a wide margin.
+        script = self.launcher("Start Faceplace Marketbook (Mac).command")
+        self.assertIn("(count of panes) is 1", script)
+
+
 class _Nothing:
     """A context manager standing in for Playwright and for keep_awake()."""
 
