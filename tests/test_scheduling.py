@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Offline tests for saved searches and their schedule.
+Offline tests for scheduled searches and the times they run.
 
     python3 -m unittest discover tests
 
@@ -280,7 +280,7 @@ class TestSavedSearchCRUD(Redirected):
         sc.delete_search(rec["id"])
         self.assertEqual(sc.load_searches(), [])
         _, err = sc.delete_search(rec["id"])
-        self.assertIn("No saved search", err)
+        self.assertIn("No scheduled search", err)
 
     def test_find_by_id_name_or_case_insensitive_name(self):
         rec = self.make()
@@ -305,6 +305,46 @@ class TestSavedSearchCRUD(Redirected):
         self.assertEqual(s["pace"], "fast")
         self.assertEqual(s["interval"], {"every": 1, "unit": "days"})
 
+    def test_a_search_saved_before_or_queries_existed_still_loads(self):
+        # Its one query is what it always was; it simply becomes a list of one.
+        sc.SEARCHES_PATH.write_text(
+            json.dumps({"searches": [{"id": "x", "name": "Old",
+                                      "query": "defender 110"}]}),
+            encoding="utf-8")
+        s = sc.load_searches()[0]
+        self.assertEqual(s["queries"], ["defender 110"])
+        self.assertEqual(s["query"], "defender 110")
+
+    def test_several_queries_are_saved_and_summed_up_on_one_line(self):
+        rec = self.make(name="Either", queries=["defender 110", "land rover 90"])
+        self.assertEqual(rec["queries"], ["defender 110", "land rover 90"])
+        # query is derived, never sent: the two can't drift apart.
+        self.assertEqual(rec["query"], "defender 110 OR land rover 90")
+        self.assertEqual(sc.load_searches()[0]["queries"],
+                         ["defender 110", "land rover 90"])
+
+    def test_blank_boxes_in_the_form_are_not_queries(self):
+        rec = self.make(name="Trimmed", queries=["defender 110", "   ", ""])
+        self.assertEqual(rec["queries"], ["defender 110"])
+        rec, err = sc.add_search({"name": "Empty", "queries": ["  "],
+                                  "cities": ["Medford, OR"]})
+        self.assertIsNone(rec)
+        self.assertIn("search for", err)
+
+    def test_editing_the_one_line_query_is_not_lost_to_the_list(self):
+        rec = self.make()
+        updated, err = sc.update_search(rec["id"], {"query": "defender 90"})
+        self.assertIsNone(err)
+        self.assertEqual(updated["queries"], ["defender 90"])
+        self.assertEqual(sc.load_searches()[0]["query"], "defender 90")
+
+    def test_a_search_with_several_queries_says_it_costs_more(self):
+        rec = self.make(name="Both", queries=["defender 110", "land rover 90"])
+        warnings = " ".join(sc.interval_warnings(rec, sc.load_searches()))
+        self.assertIn("2 queries", warnings)
+        self.assertNotIn("queries", " ".join(
+            sc.interval_warnings(self.make(name="One"), sc.load_searches())))
+
 
 class TestSafetyWarnings(Redirected):
     def test_short_intervals_warn(self):
@@ -320,7 +360,7 @@ class TestSafetyWarnings(Redirected):
         existing = [{"id": f"s{i}", "enabled": True} for i in range(sc.SAFE_MAX_SEARCHES)]
         warns = sc.interval_warnings({"interval": {"every": 1, "unit": "days"}},
                                      existing)
-        self.assertTrue(any("active saved searches" in w for w in warns))
+        self.assertTrue(any("active scheduled searches" in w for w in warns))
 
     def test_paused_searches_do_not_count_towards_the_limit(self):
         existing = [{"id": f"s{i}", "enabled": False} for i in range(9)]
@@ -909,10 +949,14 @@ class TestReport(unittest.TestCase):
         self.assertIn("1997 Defender 110", html)
 
     def test_it_says_where_the_full_gallery_is(self):
+        # The way back to everything is the app itself, not a folder the reader
+        # would have to go find on disk.
         _, text, html = self.report()
         for body in (text, html):
-            self.assertIn("runs/saved/defender_110/gallery.html", body)
+            self.assertIn("Past searches", body)
+            self.assertIn("Faceplace Marketbook", body)
         self.assertIn("stripped-down copies", text)
+        self.assertNotIn("runs/saved/defender_110", text)
 
     def test_nothing_removed_says_so_explicitly(self):
         _, text, html = self.report(removed=[])
@@ -930,6 +974,19 @@ class TestReport(unittest.TestCase):
         self.assertIn("across 1 city.", text)
         self.assertIn("across 1 city ", html)
 
+    def test_it_says_what_was_searched_for(self):
+        _, text, html = self.report()
+        self.assertIn("Searched for 'defender 110' across", text)
+        self.assertIn("defender 110", html)
+
+    def test_a_search_with_two_queries_names_both_of_them(self):
+        search = {**SEARCH, "queries": ["defender 110", "land rover 90"],
+                  "query": "defender 110 OR land rover 90"}
+        _, text, html = sc.build_report(search, summary_fixture(), None, ())
+        self.assertIn("Searched for 'defender 110' or 'land rover 90' across",
+                      text)
+        self.assertIn("&lsquo;land rover 90&rsquo;", html)
+
     def test_the_start_time_is_shown_in_local_time(self):
         # The sweep hands back a UTC stamp; the report has to say the wall-clock
         # time the run actually happened.
@@ -946,7 +1003,7 @@ class TestReport(unittest.TestCase):
     def test_how_to_pause_is_always_included(self):
         _, text, html = self.report()
         for body in (text, html):
-            self.assertIn("Saved searches", body)
+            self.assertIn("Scheduled searches", body)
 
     def test_warnings_are_shown_prominently(self):
         _, text, html = self.report(warnings=["Your radius is only 250 miles."])
@@ -973,6 +1030,75 @@ class TestReport(unittest.TestCase):
     def test_descriptions_line_explains_the_saving(self):
         _, text, _ = self.report()
         self.assertIn("only new listings need one", text)
+
+
+# ----------------------------------------------- the way back to the real gallery
+class TestGalleryLink(unittest.TestCase):
+    """The report names a file on one particular computer. On that computer it
+    should be one click away, and everywhere else it should degrade into
+    something the reader can still act on."""
+
+    def html(self, **kw):
+        return sc.build_report(SEARCH, summary_fixture(**kw), None, ())[2]
+
+    def test_the_gallery_is_a_link_and_not_just_a_path(self):
+        html = self.html()
+        self.assertIn(
+            'href="file:///tmp/runs/saved/defender_110/gallery.html"', html)
+
+    def test_a_folder_name_with_spaces_still_makes_a_working_link(self):
+        # A scheduled search called "Defender 110" would slug down, but nothing
+        # stops a run folder holding a space or an ampersand, and a raw one in
+        # an href is a link that lands somewhere else or nowhere.
+        html = self.html(gallery="/tmp/runs/my search & co/gallery.html")
+        self.assertIn('href="file:///tmp/runs/my%20search%20%26%20co/gallery.html"',
+                      html)
+        self.assertNotIn("my search & co/gallery.html", html)
+
+    def test_the_link_is_never_the_only_way_back(self):
+        # Gmail strips file:// hrefs, and a reader on a phone can't use one
+        # anyway, so the paragraph around it has to name a route that doesn't
+        # depend on the link working.
+        html = self.html()
+        self.assertIn("Past searches", html)
+        self.assertIn("attached files", html)
+
+    def test_a_run_with_no_gallery_points_at_the_app_not_the_folder(self):
+        html = self.html(gallery=None)
+        self.assertNotIn("file://", html)
+        self.assertNotIn("/tmp/runs/saved/defender_110", html)
+        self.assertIn("Past searches", html)
+
+    def test_a_path_that_cannot_be_linked_is_left_out_entirely(self):
+        # Whatever a relative path is relative to, it isn't the machine reading
+        # the email. A link built from one would point somewhere real and
+        # wrong, and the path on its own is no use to the reader either.
+        html = self.html(gallery="runs/saved/defender_110/gallery.html")
+        self.assertNotIn("file://", html)
+        self.assertNotIn("runs/saved/defender_110/gallery.html", html)
+        self.assertIn("Past searches", html)
+
+    def test_nothing_written_anywhere_still_leaves_a_sane_paragraph(self):
+        html = self.html(gallery=None, run_dir=None)
+        self.assertNotIn("file://", html)
+        self.assertNotIn("<code", html)
+        self.assertIn("attached files", html)
+
+    def test_the_attachments_are_named_as_the_way_in_from_a_phone(self):
+        # The graceful failure: the link does nothing away from that computer,
+        # so the same email has to carry a copy that opens anywhere.
+        for kw in ({}, {"gallery": None}, {"gallery": "results/gallery.html"}):
+            self.assertIn("open on any device", self.html(**kw))
+
+    def test_the_link_is_the_one_the_app_itself_would_open(self):
+        # past_runs opens a gallery with the same file:// form; if the two ever
+        # disagreed, one of them would be the broken one.
+        with TemporaryDirectory() as tmp:
+            gallery = Path(tmp) / "runs" / "saved" / "d 110" / "gallery.html"
+            gallery.parent.mkdir(parents=True)
+            gallery.write_text("<html>", encoding="utf-8")
+            self.assertIn(f'href="{gallery.as_uri()}"',
+                          self.html(gallery=str(gallery)))
 
 
 # ------------------------------------------------------------------ attachments
@@ -1148,6 +1274,61 @@ class TestReconciliation(unittest.TestCase):
         self.assertEqual([r["_score"] for r in feed.values()], [7, 7, 7])
 
 
+# ------------------------------------------- email as a step, not an afterthought
+class TestSavingNeedsEmail(Redirected):
+    """A scheduled search reports by email and by nothing else, so one saved before
+    there's an account to send from runs on time, finds things, and tells
+    nobody. The window refuses to make one until email works."""
+
+    FORM = {"name": "Defender 110", "queries": ["defender 110"],
+            "cities": ["Medford, OR"], "interval": {"every": 1, "unit": "days"}}
+    ACCOUNT = {"provider": "gmail", "address": "me@gmail.com",
+               "app_password": "abcd efgh ijkl mnop"}
+
+    def setUp(self):
+        super().setUp()
+        # Never let a test reach launchd or Task Scheduler.
+        self._installed = sc.schedule_installed
+        sc.schedule_installed = lambda: False
+        self.addCleanup(lambda: setattr(sc, "schedule_installed", self._installed))
+
+    def test_saving_is_refused_while_there_is_no_email(self):
+        res = sc.ui_hooks()["save_search"](dict(self.FORM))
+        self.assertIn("Email & Setup", res["error"])
+        self.assertIs(res["email_ready"], False)
+        self.assertFalse(sc.SEARCHES_PATH.exists())
+
+    def test_saving_goes_through_once_email_is_set_up(self):
+        sc.save_email_config(self.ACCOUNT)
+        res = sc.ui_hooks()["save_search"](dict(self.FORM))
+        self.assertNotIn("error", res)
+        self.assertEqual([s["name"] for s in sc.load_searches()], ["Defender 110"])
+
+    def test_editing_one_is_refused_after_the_email_settings_go_away(self):
+        sc.save_email_config(self.ACCOUNT)
+        saved = sc.ui_hooks()["save_search"](dict(self.FORM))["searches"][0]
+        sc.EMAIL_CONFIG_PATH.unlink()
+        res = sc.ui_hooks()["save_search"]({**self.FORM, "id": saved["id"],
+                                            "name": "Something else"})
+        self.assertIn("error", res)
+        self.assertEqual([s["name"] for s in sc.load_searches()], ["Defender 110"])
+
+    def test_the_window_is_told_whether_email_works_before_it_opens(self):
+        self.assertIs(sc.ui_hooks()["email_config"]()["ready"], False)
+        sc.save_email_config(self.ACCOUNT)
+        cfg = sc.ui_hooks()["email_config"]()
+        self.assertIs(cfg["ready"], True)
+        self.assertEqual(cfg["address"], "me@gmail.com")
+
+    def test_a_half_finished_account_reports_itself_as_not_ready(self):
+        res = sc.ui_hooks()["save_email"]({"provider": "gmail",
+                                           "address": "me@gmail.com",
+                                           "app_password": ""})
+        self.assertIs(res["ready"], False)
+        res = sc.ui_hooks()["save_email"](dict(self.ACCOUNT))
+        self.assertIs(res["ready"], True)
+
+
 # ------------------------------------------------------------------------- SMTP
 class RecordingSMTP:
     """Stands in for smtplib.SMTP so the message itself can be inspected. The
@@ -1192,7 +1373,7 @@ class TestSending(Redirected):
         self.addCleanup(lambda: setattr(smtplib, "SMTP", self._real))
         self.cfg = sc.save_email_config(
             {"provider": "gmail", "address": "me@gmail.com",
-             "app_password": "abcd efgh ijkl mnop", "default_to": "me@gmail.com"})
+             "app_password": "abcd efgh ijkl mnop"})
 
     def test_config_round_trip(self):
         again = sc.load_email_config()
@@ -1221,11 +1402,24 @@ class TestSending(Redirected):
                 self.assertIn("Nothing was saved", res["error"])
         self.assertEqual(sc.load_email_config()["address"], "me@gmail.com")
 
-    def test_a_mistyped_recipient_is_refused_too(self):
+    def test_an_old_send_to_address_is_cleared_out_on_the_next_save(self):
+        # It used to be a second place to say where reports go, alongside the
+        # one on each search. Left in the file it would still quietly redirect
+        # a search that has no address of its own.
+        sc.save_email_config({"provider": "gmail", "address": "me@gmail.com",
+                              "app_password": "pw",
+                              "default_to": "someone@else.com"})
         res = sc.ui_hooks()["save_email"](
             {"provider": "gmail", "address": "me@gmail.com",
-             "app_password": "abcdefghijklmnop", "default_to": "friend@"})
-        self.assertIn("error", res)
+             "app_password": "abcdefghijklmnop"})
+        self.assertNotIn("error", res)
+        self.assertNotIn("default_to", sc.load_email_config())
+
+    def test_a_search_with_no_address_of_its_own_reports_to_the_account(self):
+        sc.save_email_config({"provider": "gmail", "address": "me@gmail.com",
+                              "app_password": "pw"})
+        sc.send_email(sc.load_email_config(), "", "subject", "body")
+        self.assertEqual(RecordingSMTP.sent[-1]["To"], "me@gmail.com")
 
     def test_an_unusual_but_valid_address_is_accepted(self):
         for good in ("me+tag@gmail.com", "first.last@sub.domain.co.uk",
@@ -1462,8 +1656,9 @@ class TestScheduledPipeline(Redirected):
         self.addCleanup(lambda: setattr(sc, "rearm_wake", real_wake))
 
         sc.save_email_config({"provider": "gmail", "address": "me@gmail.com",
-                              "app_password": "pw", "default_to": "me@gmail.com"})
+                              "app_password": "pw"})
         self.calls = []
+        self.asked_for = []
 
     def _restore_storage(self):
         for k, v in self._storage.items():
@@ -1474,6 +1669,7 @@ class TestScheduledPipeline(Redirected):
         Uses the real reconciliation so the carry-forward rule is exercised."""
         def sweep(query, scrolls, exact, **kw):
             self.calls.append(kw)
+            self.asked_for.append(query)
             feed_rows, removed = batches[len(self.calls) - 1]
             run_dir = Path(kw["run_dir"])
             prev_by_id = {r["item_id"]: dict(r)
@@ -1542,6 +1738,16 @@ class TestScheduledPipeline(Redirected):
         self.assertEqual(row, (rec["id"], 2, 2, 0, "ok"))
         self.assertEqual(sorted(sc.previous_item_ids(con, rec["id"])), ["a", "b"])
 
+    def test_the_sweep_is_handed_every_query_the_search_holds(self):
+        rec = self.make(name="Either", queries=["defender 110", "land rover 90"])
+        sc.run_saved_search(rec, sweep=self.stub_sweep([(self.batch("a"), [])]))
+        self.assertEqual(self.asked_for, [["defender 110", "land rover 90"]])
+
+    def test_a_single_query_search_still_hands_over_a_list(self):
+        rec = self.make()
+        sc.run_saved_search(rec, sweep=self.stub_sweep([(self.batch("a"), [])]))
+        self.assertEqual(self.asked_for, [["defender 110"]])
+
     def test_timestamps_are_written_before_the_run_starts(self):
         # Written up front so a crash can't leave a search retrying in a loop.
         rec = self.make()
@@ -1593,7 +1799,6 @@ class TestScheduledPipeline(Redirected):
             self.assertTrue(kwargs["unattended"])
             self.assertTrue(kwargs["no_pause"])
             self.assertFalse(kwargs["open_gallery"])
-            self.assertTrue(kwargs["assume_yes"])
             self.assertEqual(kwargs["login_wait"], 60)
 
     # -- what stays and what goes -------------------------------------------
@@ -2049,6 +2254,50 @@ class TestUnknownCityDetection(unittest.TestCase):
                 raise RuntimeError("navigation destroyed the page")
         self.assertEqual(fb.city_shown(Broken()), "")
         self.assertFalse(fb.city_was_dropped(Broken(), "x"))
+
+
+class TestCitySummary(unittest.TestCase):
+    """A city is swept once per query, so its scroll counters arrive one set per
+    query and have to add up into the single line per city that run.json, the
+    closing summary and the emailed report all read."""
+
+    def stats(self, **kw):
+        base = {"scrolls_used": 12, "scroll_ceiling": 60, "cards": 400,
+                "keepers_seen": 30, "stop_reason": "no new matches",
+                "scroll_seconds": 100.0, "seconds_saved_estimate": 300.0,
+                "divider_seen": False}
+        return {**base, **kw}
+
+    def test_one_query_reads_exactly_as_it_used_to(self):
+        s = fb.city_summary({"defender 110": self.stats()}, kept=7, dropped=3)
+        self.assertEqual(s["scrolls_used"], 12)
+        self.assertEqual(s["scroll_ceiling"], 60)
+        self.assertEqual(s["cards"], 400)
+        self.assertEqual(s["stop_reason"], "no new matches")
+        self.assertEqual((s["kept"], s["dropped"]), (7, 3))
+        # Nothing to tell apart, so nothing is broken out.
+        self.assertNotIn("per_query", s)
+
+    def test_two_queries_are_added_up_and_kept_alongside(self):
+        per_query = {"defender 110": self.stats(),
+                     "land rover 90": self.stats(scrolls_used=8, cards=250,
+                                                 stop_reason="divider",
+                                                 divider_seen=True)}
+        s = fb.city_summary(per_query, kept=9, dropped=4)
+        self.assertEqual(s["queries_run"], 2)
+        self.assertEqual(s["scrolls_used"], 20)
+        self.assertEqual(s["scroll_ceiling"], 120)
+        self.assertEqual(s["cards"], 650)
+        self.assertEqual(s["divider_seen"], True)
+        self.assertEqual(s["stop_reason"], "no new matches, divider")
+        # kept and dropped are the city's uniques, not the sum of the queries:
+        # a listing both queries found is one listing.
+        self.assertEqual((s["kept"], s["dropped"]), (9, 4))
+        self.assertEqual(list(s["per_query"]), list(per_query))
+
+    def test_the_same_reason_twice_is_only_said_once(self):
+        s = fb.city_summary({"a": self.stats(), "b": self.stats()}, 1, 1)
+        self.assertEqual(s["stop_reason"], "no new matches")
 
 
 class TestMacPermissions(unittest.TestCase):

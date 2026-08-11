@@ -8,6 +8,8 @@ Rendered as a small HTML page in a Chromium window driven by Playwright, which
 is already a dependency, so there's nothing extra to install and the styling can
 share the gallery's palette and typewriter faces exactly. The page calls back
 into Python through an exposed function, so no local web server is involved.
+Chromium runs it in an app window — no address bar, no tabs — so that what
+opens is a window belonging to this app rather than a browser showing a page.
 
 The page itself is three files in ui/ — markup, stylesheet, script — assembled
 here. They're substituted into one string rather than linked, because the window
@@ -15,6 +17,9 @@ is loaded with set_content() and so has no base URL for a relative href to
 resolve against.
 """
 import json
+import shutil
+import tempfile
+import webbrowser
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
@@ -23,6 +28,11 @@ UI_DIR = Path(__file__).resolve().parent / "ui"
 
 FONTS = ("https://fonts.googleapis.com/css2?family=Lato:ital,wght@0,400;0,700;"
          "1,400&family=Courier+Prime:wght@400;700&display=swap")
+
+# The document the window opens on, before its real contents are written in.
+# It exists to be a valid address for --app and to put the right name in the
+# title bar for the moment before the page arrives.
+APP_URL_TITLE = "<title>Faceplace%20Marketbook</title>"
 
 
 def _asset(name):
@@ -48,11 +58,25 @@ def _call(hooks, name, default=None):
         return default
 
 
+def open_link(url):
+    """A link in the window, opened in the everyday browser. Never in the
+    window itself: that one is Playwright's, so it has no address bar to come
+    back from, it isn't logged into Facebook, and it closes as soon as a search
+    starts. Anything that isn't a web address is refused, because this is
+    reached from the page and ends in a call to the shell's URL handler."""
+    if not str(url).startswith(("http://", "https://")):
+        return
+    try:
+        webbrowser.open(url, new=1)
+    except Exception as e:
+        # The terminal behind the window is where everything else says so, and
+        # the address is written out in the window either way.
+        print(f"Couldn't open {url} in a browser ({e}).")
+
+
 def render(locations, paces, defaults, saved=(), email=None,
            units=("hours", "days"), builtins=(), shortcut=None, update=None):
     defaults = dict(defaults or {})
-    # 0 / None means "never ask", which the form shows as an empty field.
-    budget = defaults.get("descriptions_budget") or ""
     # The update banner is three files of its own rather than lines added to the
     # three below, because it's a self-contained thing that either appears or
     # doesn't. They're joined on rather than linked for the same reason as
@@ -70,7 +94,6 @@ def render(locations, paces, defaults, saved=(), email=None,
             .replace("__UPDATE__", _json(update or {}))
             .replace("__SHORTCUT__", _json(shortcut or {"ask": False}))
             .replace("__FONTS__", FONTS)
-            .replace("__BUDGET__", str(budget))
             .replace("__BUILTINS__", _json(list(builtins)))
             .replace("__LOCATIONS__", _json(list(locations)))
             .replace("__PACES__", _json(paces))
@@ -89,10 +112,10 @@ def collect_settings(locations, paces, defaults=None, headless=False,
     (labels, error) and persist the change. Without them the city list is
     read-only. Cities named in `builtins` get no remove button.
 
-    `hooks` wires up the saved-search and email tabs. Every entry is optional;
-    whatever is missing simply leaves that part of the window inert, so this
-    module still works with nothing but the search form. See scheduling.ui_hooks
-    for the implementations.
+    `hooks` wires up the saved-search, past-search and email tabs. Every entry
+    is optional; whatever is missing simply leaves that part of the window
+    inert, so this module still works with nothing but the search form. See
+    scheduling.ui_hooks and past_runs.ui_hooks for the implementations.
 
     `on_ready(page)` is called once the page is loaded, which is how the test
     suite clicks through this window without a person in front of it.
@@ -149,12 +172,31 @@ def collect_settings(locations, paces, defaults=None, headless=False,
                 return {"error": f"{type(e).__name__}: {e}"}
         return call
 
+    # An app window: no address bar, no tab strip, nothing but the page. What
+    # this opens is a settings window, and the browser toolbar was the reason it
+    # didn't behave like one — Chromium gives the keyboard to the address bar
+    # when a window opens, so the caret would sit blinking in the query box
+    # while whatever was typed went to the omnibox. The page can't take it
+    # back, and can't even tell: Playwright emulates focus, so as far as the
+    # document knows it has the keyboard already. A window with no omnibox
+    # leaves the keyboard nowhere else to be.
+    #
+    # App mode is a startup flag, so the window has to be the one Chromium opens
+    # for itself, which is what a persistent context gives us. Nothing about
+    # this window is worth keeping between launches, so its profile is a
+    # temporary one that goes when it does. The address it starts on has to be a
+    # real one — Chromium ignores --app for about:blank and hands back an
+    # ordinary browser window — so it opens on an empty document of our own that
+    # set_content replaces before anyone sees it.
+    profile = tempfile.mkdtemp(prefix="faceplace-window-")
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=headless,
-                                    args=["--window-size=1000,1180"])
-        page = browser.new_page(**({} if not headless
-                                   else {"viewport": {"width": 1000, "height": 1180}}),
-                                no_viewport=not headless)
+        ctx = p.chromium.launch_persistent_context(
+            profile, headless=headless,
+            args=[f"--app=data:text/html,{APP_URL_TITLE}",
+                  "--window-size=1000,1180"],
+            **({"viewport": {"width": 1000, "height": 1180}} if headless
+               else {"no_viewport": True}))
+        page = ctx.pages[0] if ctx.pages else ctx.new_page()
         # First answer wins: a stray second click, or a close that races a
         # submit, must not replace what the user already asked for.
         def finish(data):
@@ -165,6 +207,7 @@ def collect_settings(locations, paces, defaults=None, headless=False,
         page.expose_function("pyCancel", lambda: finish(None))
         page.expose_function("pyAddCity", add_city)
         page.expose_function("pyRemoveCity", remove_city)
+        page.expose_function("pyOpenLink", open_link)
         for js_name, hook_name in (
                 ("pyListSearches", "list_searches"),
                 ("pySaveSearch", "save_search"),
@@ -175,8 +218,10 @@ def collect_settings(locations, paces, defaults=None, headless=False,
                 ("pyTestEmail", "test_email"),
                 ("pyScheduleState", "schedule_state"),
                 ("pySetSchedule", "set_schedule"),
+                ("pyListRuns", "list_runs"),
+                ("pyOpenRun", "open_run"),
+                ("pyDeleteRun", "delete_run"),
                 ("pyAddShortcut", "add_shortcut"),
-                ("pyReopenShortcut", "shortcut_reopen"),
                 ("pyShortcutNever", "shortcut_never"),
                 ("pyUpdateNow", "update_now"),
                 ("pyUpdateSkip", "update_skip")):
@@ -192,7 +237,11 @@ def collect_settings(locations, paces, defaults=None, headless=False,
         except Exception:
             pass  # window closed mid-wait
         try:
-            browser.close()
+            ctx.close()
         except Exception:
             pass
+    # Chromium can still be letting go of the profile as this runs, and on
+    # Windows that leaves a file undeletable for a moment. A window that closed
+    # properly must not fail over its own scratch directory.
+    shutil.rmtree(profile, ignore_errors=True)
     return state.get("data")

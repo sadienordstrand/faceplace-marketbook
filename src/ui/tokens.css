@@ -1,6 +1,13 @@
 /* The palette and the two typefaces that the settings window and the gallery are
    both built from.*/
 :root {
+  /* Both pages are dark, and this is what tells the browser so. Without it the
+     scrollbars, the text selection and the spinners on a number box are all
+     drawn for a white page, which on this background reads as a bright strip
+     down the side rather than part of the window. Saying it here gets the
+     platform's own dark versions, which is nearer to native than anything
+     ::-webkit-scrollbar could be painted to look like. */
+  color-scheme: dark;
   --olive: #373D1F; --olive-dk: #262B14; --olive-lt: #5C6537;
   --accent: #ED926B; --accent-soft: #F0AC8E;
   --bg: #16180F; --card: #212418; --card-hi: #2A2E20;

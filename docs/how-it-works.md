@@ -44,6 +44,7 @@ Alongside them:
 
 - `settings_ui.py`
 - `build_gallery.py`
+- `past_runs.py`
 - `scheduling.py`
 - `make_desktop_icon.py`
 - `updater.py` and `version.py`
@@ -74,7 +75,7 @@ place these are named.
 | `fb_session/` | Browser profile holding the login session. Must stay out of version control. |
 | `marketplace_results.sqlite` | Cumulative archive across all runs. Listings are upserted, so re-seeing one updates its price, title, and `scraped_at`. |
 | `my_locations.json` | Cities you added yourself, so a personal city is never a change to a tracked file. |
-| `saved_searches.json` | Saved searches and their schedules. |
+| `saved_searches.json` | Scheduled searches and how often each one runs. |
 | `email_config.json` | SMTP address and app password. Must stay out of version control. |
 | `shortcuts.json` | Which shortcuts exist, and whether the offer was waved away. |
 | `update.json` | When the repository was last asked for its version, what it said, and any version waved away. |
@@ -102,10 +103,12 @@ python3 -m venv .venv
 
 .venv/bin/python src/fb_marketplace_sweep.py --query "land rover defender" \
     --exclude "can am, otterbox" --min-price 4000 --max-price 120000
+
+.venv/bin/python src/fb_marketplace_sweep.py --query "defender 110" --query "land rover 90"
 ```
 
 `--ui` forces the window even when flags are given, seeding the form with them;
-`--no-ui` always goes straight to the sweep. Saved searches have their own entry
+`--no-ui` always goes straight to the sweep. Scheduled searches have their own entry
 point, `src/scheduling.py`: `--tick` (what launchd and Task Scheduler call: every
 due search in creation order, under one lock), `--list`, `--run NAME`,
 `--install`, `--uninstall`, `--test-email`, `--no-email`, and `--verify-probe`.
@@ -115,7 +118,7 @@ cloned](#updating-a-copy-that-was-never-cloned).
 
 | Flag | Description |
 | --- | --- |
-| `--query TEXT` | Search query. Without it (and without `--no-ui`) the window opens. |
+| `--query TEXT` | Search query. Without it (and without `--no-ui`) the window opens. Repeat it for up to 5 OR'd queries. |
 | `--exclude TERMS` | Comma-separated terms to reject, ignoring case, spaces, and punctuation. |
 | `--min-price N` / `--max-price N` | Price bounds, applied server-side and locally. |
 | `--min-year Y` / `--max-year Y` | Model-year bounds, read from the listing title. Local only. |
@@ -124,7 +127,6 @@ cloned](#updating-a-copy-that-was-never-cloned).
 | `--import-urls FILE` | Parse pasted search URLs into `locations.json`. |
 | `--out CSV` | Explicit CSV path; skips the per-run `runs/<query>_<date>/` folder. |
 | `--pace NAME` | `fast` (~7s per listing, default) or `slow` (~9s). |
-| `--descriptions-budget MIN` | Ask before descriptions would take longer than `MIN` minutes. Default `0`, which never asks; `--yes` never asks either. |
 | `--match TERM` / `--limit N` | Only describe listings whose title contains `TERM`, or only the first `N`. |
 | `--scrolls N` | Max scrolls per city — a safety ceiling only. Default `60`. |
 | `--exact` | Ask Facebook for tight matching (default is loose). |
@@ -141,13 +143,18 @@ cloned](#updating-a-copy-that-was-never-cloned).
 
 1. **Sweep** — visit each location and scroll its results, filtering as it goes
    and stopping once three scrolls turn up nothing that could pass the filters
-   (see [How deep it scrolls](#how-deep-it-scrolls)).
+   (see [How deep it scrolls](#how-deep-it-scrolls)). A location is swept once
+   per query (see [Several queries](#several-queries)).
 2. **Retrieve descriptions** — visit each kept listing's detail page *once* for
    the description and full-size photo, writing each to the database the moment
-   it's done, so Ctrl-C stops the work without discarding it.
+   it's done.
 3. **Thumbnails** — save every image locally, reusing anything already on disk.
 4. **Gallery** — write `gallery.html` and `lightweight_gallery.html`, and open
    the first in a browser.
+
+Ctrl-C at any point in the first three stops that stage where it stands and
+jumps to the fourth with whatever has been found (see
+[Interrupts](#interrupts-and-why-windows-needs-care)).
 
 Results from every city are merged by listing id *before* the description and
 thumbnail stages, so overlapping city radii never cause duplicate work.
@@ -188,17 +195,52 @@ In order of how much junk they remove:
   Sellers who omit it are kept unless `--exclude-no-year` says otherwise, and
   that switch only takes effect alongside a bound — on its own it would discard
   every listing whose seller just wrote "Land Rover Defender".
-- **Query words** are required by default: 3+ letter words, matched at word
-  starts, so "defender" catches "Defenders" but "van" won't match "advantage".
-- **Numbers in the query rank rather than filter**, since sellers often omit them.
-  Listings that have the number are described first, so an interrupted or capped
-  description run spends its time on the best candidates.
+- **Query words** are all required. Every run of letters and digits in the query
+  is a word — numbers and one- or two-letter words included, so "defender 110"
+  keeps no 90s and "vw bus" keeps no unbranded buses — and each is matched at a
+  word start, so "chev" catches both "Chevy" and "Chevrolet" while "van" won't
+  match "advantage".
+- **Numbers still rank as well as filter.** A number in the *title* earns more
+  than the same number somewhere in the card text, so listings that lead with it
+  are described first and an interrupted or capped description run spends its
+  time on the best candidates.
 
 **Why `--exact` is off by default.** Measured head-to-head on one city with
 everything else identical, `exact=true` returned 63 raw cards versus 1,599, and
 after filtering yielded 39 listings against 73 — every one of which was already
 in the loose set. It found nothing new while discarding 34 genuine Defender 110s,
 including a $30,995 2022 and an $86,992 2025. Fast reconnaissance, not better.
+
+## Several queries
+
+A search is a list of up to `MAX_QUERIES` (5) query strings: AND within a query,
+OR between them. `query_groups()` turns them into one list of required words per
+query, and `matches_query()` keeps a listing whose text satisfies any one group.
+The exclude terms are unaffected — one excluded word drops a listing whichever
+query found it — and so is everything after them, since the price and year
+bounds belong to the search rather than to a query.
+
+Within a city the sightings are merged by listing id before anything is filtered, so a listing
+found by two queries is one row and costs one description. The two sightings can
+disagree — each query gets its own feed, and a listing that sat past the
+out-of-radius divider in one may sit well inside it in another — so
+`better_row()` keeps the sighting with the better claim to being kept rather than
+whichever arrived second. The scroll probe tests all the queries at once for the
+same reason: a card that answers a different query than the one this pass is
+scrolling for is still a real match, and will be kept.
+
+`run.json` records the whole search as `query` (the queries joined with " OR ",
+which is also what the CSV's `query` column and the run folder's name carry) and
+as `queries`, the list. Per-city scroll counters are summed across the queries so
+that everything downstream still reads one line per city, with the individual
+queries kept under `per_city.<city>.per_query` when there was more than one.
+
+A scheduled search stores `queries`, the list, and `query`, the same thing on one
+line. `queries` is the authority: `normalize_search()` derives `query` from it on
+every read and write, and fills the list in from `query` for a search saved
+before queries existed. The report, the log lines and the saved-search card all
+read the list, so a two-query search reads as 'defender 110' or 'land rover 90'
+rather than as one odd-looking string.
 
 ## Search radius
 
@@ -306,35 +348,113 @@ lb winch") from reading as years, and listings with no year sort to the bottom i
 **Hiding** a card with its `✕` is remembered by listing id in local storage, so
 it survives sorting, reloads, and even rebuilding the file from a later sweep.
 
+### Getting back to one
+
+`past_runs.py` is the Past searches tab: `list_runs()` walks `runs/` — the dated
+folders directly under it, plus one level into `runs/saved/` — and turns each
+into a card, and `open_run()` opens that run's gallery in the everyday browser
+rather than in the Playwright window asking for it.
+
+Nothing in that window may ever navigate it. It has no address bar to come back
+from, its profile isn't logged into Facebook, and it closes the moment a search
+starts — so a plain `<a href>` in the settings page would strand whoever clicked
+it. `settings.js` catches clicks on any `http` link and hands the address to
+`settings_ui.open_link()`, which is `webbrowser.open()`. That's how the "how to
+get a city's link" instructions can link to Marketplace: the browser it opens in
+is the one already logged in, which is the whole point of going there.
+
+`run.json` is where the numbers come from, but a folder holding only a
+`results.csv` still gets a card, with the listing count read off the CSV and the
+time taken from the file's own timestamp. A run whose manifest never got written
+is exactly the run someone is most likely to want back, and the alternative to
+showing it is paying to do it again.
+
+Two things a card's id has to survive. It's the folder's path relative to
+`runs/`, and it makes the round trip through the page, so `folder_for()` resolves
+it and refuses anything that doesn't land inside `runs/`. And a run that never
+built a gallery — the stage turned off, or it failed — has one built on the spot
+from its CSV, so every card is clickable rather than a third of them being dead.
+
+`delete_run()` removes a whole run folder, which is why it goes through
+`folder_for()` and then insists on `is_run()` as well: that second check is what
+keeps `runs/saved` itself — a real directory inside `runs/`, but never a card —
+from being handed to `rmtree`. The window asks for a second click before calling
+it, the same as the scheduled searches list does, and that click is the only guard
+there is. A scheduled search survives losing its folder, because what it remembers
+about listings it has already seen is in the database, not in there.
+
 ## Interrupts, and why Windows needs care
 
-Ctrl-C during the description stage stops the work and keeps it:
-`retrieve_descriptions()` catches `KeyboardInterrupt`, returns `False`, and the
-run goes straight to the CSV and gallery. Each listing is already committed to
-SQLite as it finishes, so nothing is waiting in memory.
+Ctrl-C is a way of finishing a run, not a way of failing one. At any stage it
+stops the work, keeps what has been gathered, and goes straight to the CSV and
+the gallery — so an hour of sweeping is never thrown away for wanting the second
+hour back. Four places catch it, each keeping the work at a different grain:
 
-Windows makes the teardown hazardous. A console sends `CTRL_C_EVENT` to *every*
+| Where | What is kept |
+| --- | --- |
+| `collect_city()`, mid-scroll | The cards already read off the page. Facebook recycles cards scrolled past, so they're snapshotted incrementally and there is always a complete set in hand. The city comes back with `stop_reason` `STOPPED_BY_HAND`. |
+| The city loop in `run()` | The city being swept, as far as it got, plus every city before it. Cities are committed to SQLite as they finish, so the ones behind it were never at risk. |
+| `retrieve_descriptions()` | Every listing described so far; each is committed as it finishes. Returns `False`. |
+| The `fetch_thumbs()` call | Every photo already downloaded. |
+
+Whichever fires, the rest of the stages are skipped — including the check on
+listings that stopped appearing, since a check that didn't finish must not
+confirm anything sold — and the run winds up through the same CSV → gallery →
+`run.json` path an uninterrupted one takes. The manifest and the summary carry
+`interrupted` and `interrupted_during`, which is what puts the warning at the top
+of a scheduled search's report.
+
+Two things are deliberately not salvaged. A Ctrl-C before the first city — at
+the login screen or the preflight pause — exits instead, because there is
+nothing to save; it also takes the run folder back with it, since the folder is
+made before the browser opens and Past searches lists folders. And a stop that
+finds nothing at all writes nothing at all, rather than leaving an empty run
+behind.
+
+**After a Ctrl-C, nothing may talk to the browser again.** This is the rule the
+whole thing hangs on, and it isn't obvious. Playwright's sync API runs on a
+greenlet; an exception raised out of a blocked call leaves that machinery
+wedged, and *the next call into it never returns* — no error, no timeout, just a
+run stopped one step short of writing the hour of work it is holding. Measured,
+not assumed: `browser_context.close()` after an interrupt was still blocked
+ninety seconds later, whether the signal went to Python alone or to the whole
+process group the way a terminal sends it.
+
+So on the way out, every call that would reach the browser is skipped rather
+than wrapped — `ctx.close()`, the `page.unroute()` in `retrieve_descriptions()`,
+the `page.remove_listener()` after the sweep, the page's embedded
+`<script type="application/json">` blobs. Nothing is lost by skipping them:
+leaving the `sync_playwright()` block stops the driver, which takes the browser
+with it, and that returns immediately even from the wedged state. Only work that
+touches disk — the CSV, the galleries, `run.json` — happens after an interrupt.
+
+Windows has its own version of this. A console sends `CTRL_C_EVENT` to *every*
 process attached to it, and Playwright's driver is a separate `node.exe` sharing
-that console, so the driver dies at the same instant Python raises the exception.
-Anything in a `finally` block that talks to the browser is then talking to a
-connection that no longer exists, and the exception it raises would replace the
-clean return, losing the CSV and gallery for work already finished and saved. So
-every teardown call that touches the browser is wrapped. Also worth knowing when
-reading a "it just froze" report: selecting text in a Windows console suspends
-the process at its next write to stdout, which looks identical to a hang. `Esc`
-releases it.
+that console, so the driver can die at the same instant Python raises the
+exception; a teardown call then talks to a connection that no longer exists and
+raises, where the same call on macOS hangs. Both are handled by not making the
+call. Also worth knowing when reading a "it just froze" report: selecting text in
+a Windows console suspends the process at its next write to stdout, which looks
+identical to a hang. `Esc` releases it.
 
 A long run has one more way to lose its browser connection, which is the machine
 going to sleep. `keep_awake()` wraps each long-running stage and asks the OS to
 stay up — `caffeinate -ims -w <pid>` on macOS, `SetThreadExecutionState` via
 `ctypes` on Windows — though neither can defeat closing a laptop lid.
 
-## Saved searches
+## Scheduled searches
 
-A saved search is a settings dict plus an interval, stored in
+A scheduled search is a settings dict plus an interval, stored in
 `saved_searches.json`. `scheduling.py` is one module rather than several because
 launchd and Task Scheduler need a single entry point to call, and the runner, the
 schedule arithmetic and the report all have to agree about the same state files.
+
+**Email is a prerequisite, enforced as one.** A scheduled search's entire output is a
+message, so the `save_search` hook refuses outright while `email_ready()` is
+false, and the window is told at render time — `email_config` carries a `ready`
+flag — so the save block is shut before anything is typed into it rather than
+after. Email setup used to be a separate tab someone could simply not visit, and
+skipping it produced searches that ran on time, found things, and told nobody.
 
 **Times are naive local wall clock.** A daily search means 5am the way a person
 means it, on both sides of a daylight-saving change, and the whole system runs on
@@ -372,7 +492,7 @@ one, and after that the cost is proportional to what's new. This depends on
 its `description` is always empty and its `image` a remote URL that will expire,
 and `KEEP_IF_BLANK` makes a blank incoming value lose to a stored one.
 
-`saved_run_dir()` gives one stable folder per saved search, `runs/saved/<slug>/`,
+`saved_run_dir()` gives one stable folder per scheduled search, `runs/saved/<slug>/`,
 rewritten in place with previous reports archived into `history/`; a scheduled
 search that made a new dated folder every run would bury the results it exists to
 surface. `run_lock` is an `O_CREAT | O_EXCL` file holding the pid and start time:
@@ -391,6 +511,18 @@ if it exceeds `ATTACH_MAX_MB` (12), and if the pair still won't fit in
 complete version is already on disk and the new listings are the part worth
 looking at on a phone. Only Gmail's host is special-cased by name;
 `smtp_target()` falls back to a user-supplied host and port.
+
+**The link to the real gallery is written to survive not working.**
+`_gallery_html()` turns the run's path into a `file://` link through
+`Path.as_uri()`, which encodes the spaces and ampersands a raw href would
+mangle. That link is only meaningful on the machine that holds the file: read on
+a phone it does nothing, read after the folder moved it lands on the browser's
+own "file not found", and Gmail strips `file://` hrefs before rendering. So the
+link text is never "click here" — the path stays printed underneath as plain
+text, the sentence beside it names the attachments as the copy that opens
+anywhere, and a path that can't become a URL at all (a relative one, which would
+resolve against the reader's machine and point somewhere real and wrong) is left
+as text with no link at all.
 
 **Credentials fail at the wrong layer, so the shape is checked early.** A
 mistyped address and a wrong password are the same error to a mail server: it
@@ -442,7 +574,7 @@ Python is not something anyone will find in that list by browsing.
 
 Almost nobody who runs this cloned it. They clicked Download ZIP, so there's no
 git in the folder to pull with, and re-downloading would strand the login, the
-saved searches, the database and any shortcut pointing at the old folder.
+scheduled searches, the database and any shortcut pointing at the old folder.
 `updater.py` does the same job in place instead.
 
 The version lives in `src/version.py` as `__version__`, and the check reads that
@@ -553,7 +685,14 @@ would prove nothing about the case that matters. `run_saved_search()` takes an
 injectable `sweep`, so the whole pipeline is exercised without a browser.
 `tests/test_settings_ui.py` opens the actual settings window in headless Chromium
 and clicks through it with the real hooks; it's the only level that catches a
-mis-wired button or a window close racing a submit. `tests/test_updater.py`
+mis-wired button or a window close racing a submit. One thing it structurally
+cannot see is the window itself: headless Chromium has no address bar, no tab
+strip and no title bar, so whether the `--app` flag took — and with it, whether
+the keyboard lands in the page or in an omnibox — only shows up in a real
+launch. `tests/test_past_runs.py`
+builds run folders in a temporary directory — with a manifest, without one, and
+with a `history/` — and replaces `webbrowser.open`, so nothing opens a window on
+whoever is running the suite. `tests/test_updater.py`
 builds a throwaway project folder and a zip on the spot rather than touching the
 network, and the test that earns its keep is the one that kills an update part
 way through and asserts the folder is byte-for-byte what it was.

@@ -6,9 +6,10 @@ the desktop, the Dock on a Mac, or the Start menu on Windows.
     "Start Faceplace Marketbook (Mac).command" --desktop-icon
     "Start Faceplace Marketbook (Windows).bat" --desktop-icon
 
-is the command-line way in. Ordinarily this is reached from the settings window,
-which offers a shortcut on a first launch and has a button for one thereafter,
-both through ui_hooks() below.
+is the command-line way in, and the way to replace an icon that's been left
+pointing at a folder you've since moved. Ordinarily this is reached from the
+settings window, which offers a shortcut on a launch that hasn't one, through
+ui_hooks() below.
 
 On a Mac a place is a small app bundle whose only job is to open the launcher in
 Terminal; on Windows it's an ordinary shortcut to the .bat file. Either way the
@@ -77,8 +78,8 @@ exec open -a Terminal "$launcher"
 # shell string into AppleScript, and either one would end the string early.
 MAC_MISSING_MESSAGE = (
     "This icon can no longer find the Faceplace Marketbook folder, which has "
-    "been moved, renamed or deleted. Open the folder and double-click Add to "
-    "Desktop to point a fresh icon at it."
+    "been moved, renamed or deleted. Move this icon to the Trash, then start "
+    "the app from the folder and it will offer you a new one."
 )
 
 # The Dock's own preference format. _CFURLStringType 0 means the string is a
@@ -148,9 +149,8 @@ def render(layout, sizes):
         from playwright.sync_api import sync_playwright
     except ImportError:
         raise SystemExit(
-            "This needs the app's own Python. Start the app and use "
-            "\"Add a shortcut…\" on the Email & schedule tab, rather than "
-            "running this by hand.")
+            "This needs the app's own Python. Start the app with "
+            "--desktop-icon, rather than running this file by hand.")
     art = artwork()
     pngs = {}
     with sync_playwright() as p:
@@ -290,33 +290,27 @@ def stop_asking():
     return {"ok": True}
 
 
-def offer(force=False):
-    """What the settings window should put in front of someone.
+def offer():
+    """What the settings window should put in front of someone on a launch:
+    nothing, unless this machine can make a shortcut, has none already, and
+    hasn't been told to drop the subject.
 
-    Unasked, on a launch: nothing, unless this machine can make a shortcut, has
-    none already, and hasn't been told to drop the subject.
-
-    `force` is someone pressing the button in the window that asks for the sheet
-    outright. That has to answer even when all three of those say otherwise,
-    because "don't ask again" should end the asking, not the offer — before, the
-    only ways back were the Add to Desktop launchers and a command-line flag.
+    This is the only time it's asked. Someone who turns the offer down doesn't
+    get badgered by a button sitting in the settings for the rest of the app's
+    life — a launch that still hasn't a shortcut asks again by itself, and
+    `--desktop-icon` is there for anyone who changes their mind after saying
+    never.
     """
     places = places_here()
     if not places:
         return {"ask": False}
-    taken = places_taken()
-    if not force and (load_state().get("never_ask") or taken):
+    if load_state().get("never_ask") or places_taken():
         return {"ask": False}
-    # Somewhere that already has one is still worth listing — leaving it out of a
-    # sheet someone opened on purpose reads as the app not knowing about it — but
-    # it's said plainly, and the tick starts on a place that would be new.
-    spare = [p for p in places if p not in taken]
+    # Only the first is ticked: a Dock or Start menu entry is more intrusive
+    # than a desktop icon, so it's opt-in.
     return {
         "ask": True,
-        "places": [{"id": p,
-                    "label": PLACE_LABELS[p] + ("" if p not in taken
-                                                else " — there's one here already"),
-                    "on": p == (spare[0] if spare else None)}
+        "places": [{"id": p, "label": PLACE_LABELS[p], "on": p == places[0]}
                    for p in places],
     }
 
@@ -506,10 +500,9 @@ def summary(made, trouble):
 # --- Entry points ------------------------------------------------------------
 
 def ui_hooks():
-    """What the settings window needs to offer a shortcut: once by itself on a
-    first launch, and thereafter whenever the button in it is pressed."""
+    """What the settings window needs to offer a shortcut on a launch that
+    hasn't one yet."""
     return {"shortcut_offer": offer,
-            "shortcut_reopen": lambda: offer(force=True),
             "add_shortcut": add_from_ui,
             "shortcut_never": stop_asking}
 

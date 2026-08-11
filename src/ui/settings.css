@@ -28,8 +28,8 @@
     letter-spacing: .24em; text-transform: uppercase; color: var(--accent);
     font-weight: 700;
   }
-  label.field { display: block; margin-bottom: 16px; }
-  label.field:last-child { margin-bottom: 0; }
+  .field { display: block; margin-bottom: 16px; }
+  .field:last-child { margin-bottom: 0; }
   .lab {
     display: block; font-family: var(--type); font-size: 10pt;
     letter-spacing: .16em; text-transform: uppercase; color: var(--ink-soft);
@@ -45,7 +45,28 @@
   input::placeholder { color: #6E6852; }
   .row { display: flex; gap: 16px; }
   .row > * { flex: 1; }
-  .stack > label.field { margin-bottom: 18px; }
+  /* A field that would look odd stretched the whole way, kept to the width it
+     would have had beside another one. */
+  .field.half { max-width: calc(50% - 8px); }
+
+  /* One query box, or several with OR between them. The OR gets its own line so
+     that adding a query doesn't narrow the box it belongs to. */
+  .queries { display: flex; flex-direction: column; }
+  .qrow { display: flex; align-items: stretch; gap: 8px; }
+  .qrow .qbox { flex: 1; min-width: 0; }
+  .qor {
+    font-family: var(--type); font-size: 9pt; letter-spacing: .22em;
+    text-transform: uppercase; color: var(--accent); padding: 7px 0 6px 1px;
+  }
+  .qx {
+    flex: none; background: none; border: 1px solid var(--rule); cursor: pointer;
+    color: var(--ink-soft); font: 10pt var(--type); padding: 0 12px;
+    border-radius: 2px;
+  }
+  .qx:hover {
+    color: #241608; background: var(--accent); border-color: var(--accent);
+  }
+  .addq { margin-top: 10px; }
   .hint {
     font-size: 11pt; color: var(--ink-soft); margin-top: 8px; line-height: 1.55;
   }
@@ -53,9 +74,14 @@
   .hint li { margin-bottom: 6px; }
   .hint li:last-child { margin-bottom: 0; }
   code { font-family: var(--type); font-size: 10.5pt; color: var(--accent-soft); }
+  a { color: var(--accent); text-decoration-color: rgba(237,146,107,.45); }
+  a:hover { text-decoration-color: var(--accent); }
 
   /* Toggles and segmented controls share the typewriter button look. */
   .toggles { display: flex; flex-wrap: wrap; gap: 9px; }
+  /* A row of toggles that answers the explanation above it, rather than the
+     first thing in its card. */
+  .hint + .toggles { margin-top: 14px; }
   .tog {
     display: inline-flex; align-items: center; gap: 10px; cursor: pointer;
     padding: 9px 13px; background: var(--olive-dk);
@@ -106,7 +132,6 @@
   .addcity input:first-child { flex: 0 0 190px; }
   .addcity .mini { flex: none; padding-left: 18px; padding-right: 18px; }
   .addcity-msg { margin-top: 8px; }
-  .addcity-msg.bad { color: var(--accent); }
   details.help { margin-top: 12px; }
   details.help summary {
     cursor: pointer; color: var(--accent); font: 10pt var(--type);
@@ -121,6 +146,8 @@
     font: 10pt var(--type); letter-spacing: .14em; text-transform: uppercase;
   }
   .mini:hover { background: var(--accent); color: #241608; }
+  .mini:disabled { opacity: .4; cursor: not-allowed; }
+  .mini:disabled:hover { background: none; color: var(--accent); }
   .seclab { display: flex; align-items: center; justify-content: space-between; }
   .seclab .grp { display: flex; gap: 7px; margin-bottom: 14px; }
 
@@ -129,21 +156,31 @@
     border-top: 5px solid var(--accent); padding: 15px 26px;
     display: flex; align-items: center; justify-content: space-between; gap: 18px;
   }
+  /* The summary is as long as the search is complicated, so it takes the width
+     that's left and wraps within it. The buttons keep theirs: a full search
+     description could otherwise squeeze "Start Search" onto two lines. */
   .est {
+    flex: 1; min-width: 0; line-height: 1.5;
     font-family: var(--type); font-size: 10pt; letter-spacing: .1em;
     text-transform: uppercase; color: var(--ink);
   }
   .est b { color: var(--accent); }
-  .actions { display: flex; gap: 10px; }
+  .actions { display: flex; gap: 10px; flex: none; }
   .go, .cancel {
     font-family: var(--type); text-transform: uppercase; cursor: pointer;
     border-radius: 2px; letter-spacing: .18em; font-size: 11pt; padding: 12px 26px;
+    white-space: nowrap;
   }
   .go { background: var(--accent); color: #241608; border: 1px solid var(--accent); font-weight: 700; }
   .go:hover { background: var(--accent-soft); }
   .go:disabled { opacity: .45; cursor: not-allowed; }
   .cancel { background: none; color: var(--ink-soft); border: 1px solid var(--rule); }
   .cancel:hover { color: var(--ink); border-color: var(--ink-soft); }
+  /* --rule is a hairline on the dark card the sheet is made of, but the footer
+     is olive and nearly the same colour, so there the border reads as a smudge
+     round the button rather than an edge. One step lighter than what it sits
+     on, which is the relationship it has everywhere else. */
+  footer .cancel { border-color: var(--olive-lt); }
   .warn { color: var(--accent); font-family: var(--type); font-size: 10pt; }
   .blocked {
     border-left: 3px solid var(--accent); background: rgba(237,146,107,.09);
@@ -179,11 +216,19 @@
     background-size: 5px 5px, 5px 5px; background-repeat: no-repeat;
   }
   select:focus { outline: none; border-color: var(--accent); }
+  /* Every other control here shows its label in spaced-out capitals, so the
+     closed box does too. The list you open doesn't: a menu of shouted words is
+     harder to read than it looks, and on a Mac the list is drawn by the system
+     from the text as written, which is the behaviour this wants anyway. Saying
+     it on the options as well is for the platforms that draw the list
+     themselves. */
+  select { text-transform: uppercase; letter-spacing: .12em; }
+  option { text-transform: none; letter-spacing: normal; }
   .every { display: flex; gap: 12px; align-items: flex-start; }
   .every .num { flex: 0 0 110px; }
   .every .unit { flex: 0 0 190px; }
 
-  /* Saved search cards */
+  /* Scheduled search cards */
   .saved { display: flex; flex-direction: column; gap: 12px; }
   .card {
     background: var(--olive-dk); border: 1px solid var(--rule);
@@ -207,6 +252,28 @@
     color: var(--ink-soft); font-size: 11pt; margin-top: 8px; line-height: 1.6;
   }
   .card .acts { display: flex; gap: 7px; margin-top: 13px; flex-wrap: wrap; }
+
+  /* A past run is one big button: the whole card opens its gallery. */
+  .card.run { cursor: pointer; }
+  .card.run:hover, .card.run:focus-visible {
+    border-color: var(--accent); outline: none;
+  }
+  .card.run .det { margin-bottom: 10px; }
+  .card.run .foot {
+    display: flex; align-items: center; justify-content: space-between; gap: 14px;
+  }
+  .card.run .foot .acts { margin-top: 0; }
+  .card.run .opens {
+    font-family: var(--type); font-size: 9.5pt; letter-spacing: .14em;
+    text-transform: uppercase; color: var(--accent);
+  }
+  .card.run.busy { opacity: .55; cursor: progress; }
+
+  /* Scheduled searches need email set up, so the form for one is greyed out
+     whole — labels and hints included — until it is. */
+  #saveFields.gated { opacity: .45; }
+  input:disabled, select:disabled { cursor: not-allowed; }
+  .blocked .mini { margin-top: 2px; }
   .empty {
     color: var(--ink-soft); font-style: italic; padding: 18px 0; font-size: 11.5pt;
   }

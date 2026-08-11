@@ -77,10 +77,10 @@ This is the search setup window.
 
 ![The search setup window](docs/images/settings-search.png)
 
-Saved searches run on a schedule you choose, and can be paused, edited or run on
-the spot.
+Scheduled searches run at an interval you choose, and can be paused, edited or
+run on the spot.
 
-![The saved searches tab](docs/images/settings-saved.png)
+![The scheduled searches tab](docs/images/settings-saved.png)
 
 When a scheduled search finishes, it emails you a summary of what's new and what
 has sold or been taken down since last time.
@@ -217,28 +217,22 @@ headed **Add a shortcut?** Tick where you want it and click **Add shortcut**:
 - **Desktop** — an icon called **Faceplace Marketbook** that you double-click to
   start a search, exactly as the Start file does.
 - **Dock** (Mac) — keeps it in the Dock permanently. It also puts the app in
-  your own Applications folder.
+  your Applications folder.
 - **Start menu** (Windows) — nothing on screen, but typing "faceplace" finds it.
-
-You can also do it whenever you like, without waiting to be asked. In the Search
-Setup window, open the **Email & schedule** tab and click **Add a shortcut…**.
 
 A shortcut is the only thing any of this puts outside the app's folder. Deleting
 the shortcut will not delete the app itself.
 
 If you move the app's folder later, the shortcut will still be pointing at where
-the folder used to be. Click **Add a shortcut…** again from its new home and
-you'll get one that works.
+the folder used to be; the [Troubleshooting](#troubleshooting) section explains how to fix it.
 
 ---
 
 ## Running a search
 
-After the login, a **Search Setup** window opens. It has three tabs across the
-top — **New search** is the one you want now; the other two are for [automated
-searches](#automated-searches).
+After the login, a **Search Setup** window opens.
 
-Fill in the New search tab and click **Start sweep**. Each setting has a short
+Fill in the New search tab and click **Start Search**. Each setting has a short
 explanation underneath it in the window itself; this is just a brief overview:
 
 - **Query** — what you're looking for, e.g. `land rover defender 110`. More
@@ -248,13 +242,12 @@ explanation underneath it in the window itself; this is just a brief overview:
   continental US. You can add your own cities too; see below.
 - **Price range**, **Year range**, and **Exclude terms** — the most effective
   ways to cut junk. See below.
-- **Stages** — whether to collect descriptions, download photos, and build the
-  gallery. All three on is the normal choice.
-- **Description retrieval** — the pace, and an optional cap on how many listings
-  get a description.
+- **Stages** — whether to collect descriptions and download photos. Both on is
+  the normal choice; turning one off makes the search quicker. The gallery is
+  always built.
+- **Description retrieval** — an optional cap on how many listings get a
+  description, and the pace.
 
-The footer shows a running estimate of how long each listing will take, so you
-can see the cost of your choices before committing.
 
 ### Getting better results
 
@@ -284,7 +277,7 @@ But if you want to add your own city to search, you can do that.
 Facebook identifies a Marketplace city by a string buried in its web address. To
 get it:
 
-1. Open **facebook.com/marketplace** in your ordinary browser.
+1. Open [facebook.com/marketplace](https://www.facebook.com/marketplace) in your browser.
 2. Click the location, type the city you want, pick it from the dropdown, and
    click Apply.
 3. Copy the whole web address from the address bar.
@@ -324,10 +317,8 @@ works, and releases that as soon as it's done. One thing it can't override:
 external displays connected.** For an overnight run, leave the lid open and
 leave it plugged in.
 
-**You can stop it early.** Press `Control-C` in the terminal while it's
-collecting descriptions and it stops, keeps everything gathered so far, and goes
-straight to building your gallery. (Pressing `Control-C` during any other stage
-of the process may terminate the search entirely, so use with caution.)
+**You can stop it early.** Press `Control-C` in the terminal and it ends the search,
+building the gallery with everything it gathered so far.
 
 ---
 
@@ -401,7 +392,7 @@ used.
 ![The Email and schedule tab](docs/images/settings-schedule.png)
 
 1. Start the app the normal way (double-click the Start file).
-2. Click the **Email & schedule** tab at the top.
+2. Click the **Email & Setup** tab at the top.
 3. Leave that window open and go do this in your web browser:
    1. Go to **myaccount.google.com** and sign in.
    2. Click **Security & sign-in** on the left sidebar.
@@ -423,7 +414,8 @@ If it doesn't arrive, the app will tell you why in the box under the buttons.
 **One thing to know about sending mail to yourself:** Gmail sometimes files a
 message you sent yourself under **Sent Mail** and never puts it in your inbox.
 If the test message isn't in your inbox, look there before assuming it failed.
-Having reports sent to a different address avoids this entirely.
+Pointing a scheduled search at a different address avoids this
+entirely.
 
 #### Using something other than Gmail
 
@@ -440,24 +432,23 @@ You don't need a Gmail account. Pick your provider from the **Provider** menu:
 1. Click the **New search** tab.
 2. Set up your search exactly as you would for a normal run: query, cities,
    price limits, exclusions, etc.
-3. Scroll to the bottom, to **Run this on a schedule**.
+3. Scroll to the bottom, to **Scheduled search**.
 4. Give it a name. This becomes the folder name and the subject line of your
    emails.
-5. Choose how often, using the number box and the **Hours / Days** menu.
-6. Click **Save scheduled search**.
+5. Enter or change the email address you'd like the report to be sent to.
+6. Choose how often the search will run.
+7. Click **Save scheduled search**.
 
 **Daily searches run every morning.** Searches set in hours run every so many
 hours from when the last one started.
 
 > **Don't set up too many, and don't run them too often.** Every run is a full
 > sweep of every city you picked, and a lot of automated traffic is what gets
-> Facebook accounts limited or banned. Once a day is usually plenty, and more
-> often than every 6 hours is asking for trouble. Two or three saved searches is
-> a sensible ceiling. The app warns you when you go past these, but it won't
-> stop you — it's your account.
+> Facebook accounts limited or banned. A few automated runs per day is usually fine,
+> but there's no guarantee.
 
-The **Saved searches** tab lists everything you've saved. From there you can run
-one immediately, edit it, pause it, or delete it.
+The **Scheduled searches** tab lists everything you've saved. From there you can
+run one immediately, edit it, pause it, or delete it.
 
 **Neither pausing nor deleting touches your results.** Pausing just stops it
 running, and you can resume it later. Deleting removes the schedule and the
@@ -469,7 +460,7 @@ search ever found stay exactly where they are on your computer.
 A scheduled search can't run if the computer is asleep and stays asleep. This
 part gives it permission to wake up, do the run, and go back to sleep.
 
-1. In the app, go to the **Email & schedule** tab.
+1. In the app, go to the **Email & Setup** tab.
 2. Click **Turn automatic runs on**. It takes a few seconds, because the app
    then checks that the schedule it just set up can actually reach your files.
 3. On a Mac, there will be a prompt asking for your password. This is macOS
@@ -531,8 +522,8 @@ Each report contains:
   missed.
 - Two attachments: a small gallery of just the new listings, and one of
   everything currently tracked. Photos are included when they fit; on a big
-  search the attachments drop photos to stay under email size limits, and the
-  message tells you where the full gallery is on your computer.
+  search the attachments drop photos to stay under email size limits.
+  You can always view the full gallery by opening the app on your computer.
 
 You'll also get an email if a search couldn't run:
 
@@ -581,7 +572,7 @@ Marketplace city. Remove it (hover, click the **✕**) and add it again from a
 live Marketplace address. See [Adding your own cities](#adding-your-own-cities).
 
 **No email arrived and I never saw an error.** Click **Send a test email** on
-the *Email & schedule* tab. A wrong address or password can't be detected until
+the *Email & Setup* tab. A wrong address or password can't be detected until
 the mail server is asked, and a scheduled run that can't send has no way to tell
 you by email. Your results are still on your computer either way.
 
@@ -595,8 +586,8 @@ on a very long run. Running the search again picks them up.
 
 **A scheduled search never ran.** Work through these in order:
 
-1. Is it paused? Check the *Saved searches* tab.
-2. Are automatic runs on? Check the *Email & schedule* tab — the dot should be
+1. Is it paused? Check the *Scheduled searches* tab.
+2. Are automatic runs on? Check the *Email & Setup* tab — the dot should be
    green. An orange dot and **on, but blocked** means the schedule exists but
    can't reach your files; the instructions underneath say what to do.
 3. Was the computer asleep with the lid shut, hibernating, or switched off? Go
@@ -605,9 +596,11 @@ on a very long run. Running the search again picks them up.
    cause. Click **Send a test email**.
 
 **My desktop icon says it can't find the folder, or does nothing.** It holds the
-folder's location, so moving or renaming the folder breaks it. Start the app
-from its folder, then click **Add a shortcut…** on the *Email & schedule* tab —
-see [Step 5](#step-5--put-it-on-your-desktop-if-you-like).
+folder's location, so moving or renaming the folder breaks it. Throw the old
+icon away, then start the app from the folder's new home — with no shortcut left
+anywhere, it offers you a fresh one on that launch. If you'd previously ticked
+**Don't ask again**, it won't offer, and the way to ask outright is to run the
+Start file from a terminal with `--desktop-icon` on the end.
 
 **It said macOS wouldn't keep the Dock entry.** That happens occasionally; the
 Dock is particular about being edited underneath it. The app itself is in your
@@ -615,11 +608,11 @@ Applications folder either way, so open that and drag **Faceplace Marketbook**
 onto the Dock yourself.
 
 **I moved the app's folder and scheduled runs stopped.** The schedule still
-points at the old location. Go to *Email & schedule*, click **Turn them off**,
-then **Turn automatic runs on** again. The tab warns about this when it notices.
+points at the old location. Go to *Email & Setup*, click **Turn off**, then
+**Turn on** again. The tab warns about this when it notices.
 
 **A scheduled run happened but no email came.** Look in **Sent Mail** as well as
-your inbox. Then click **Send a test email** on the *Email & schedule* tab — it
+your inbox. Then click **Send a test email** on the *Email & Setup* tab — it
 reports exactly what went wrong.
 
 **"Not starting: a scheduled run has been running since…"** Two runs can't share

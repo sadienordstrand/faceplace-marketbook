@@ -85,34 +85,14 @@ class Offer(Redirected):
         mk.stop_asking()
         self.assertEqual(mk.offer(), {"ask": False})
 
-    def test_asking_for_the_sheet_outright_beats_dont_ask_again(self):
-        # The only ways back used to be the Add to Desktop launcher and a
-        # command-line flag. Now the window has a button, and it has to answer.
+    def test_dont_ask_again_stays_the_end_of_it(self):
+        # The window used to carry a button that reopened the sheet anyway.
+        # There isn't one any more: turning the offer down is meant to be the
+        # last of it, and --desktop-icon is the way back for anyone who changes
+        # their mind.
         self.on("Darwin")
         mk.stop_asking()
-        offer = mk.offer(force=True)
-        self.assertTrue(offer["ask"])
-        self.assertEqual([p["id"] for p in offer["places"]], ["desktop", "dock"])
-
-    def test_a_place_that_already_has_one_is_listed_and_says_so(self):
-        self.on("Darwin", taken=["desktop"])
-        offer = mk.offer(force=True)
-        self.assertTrue(offer["ask"])
-        desktop, dock = offer["places"]
-        self.assertIn("already", desktop["label"])
-        self.assertNotIn("already", dock["label"])
-        # The tick starts somewhere that would actually be new.
-        self.assertEqual([desktop["on"], dock["on"]], [False, True])
-
-    def test_asking_outright_still_cannot_conjure_a_place(self):
-        self.on("Linux")
-        self.assertEqual(mk.offer(force=True), {"ask": False})
-
-    def test_nothing_is_ticked_when_everywhere_has_one_already(self):
-        self.on("Darwin", taken=["desktop", "dock"])
-        offer = mk.offer(force=True)
-        self.assertTrue(offer["ask"])
-        self.assertEqual([p["on"] for p in offer["places"]], [False, False])
+        self.assertEqual(mk.offer(), {"ask": False})
 
     def test_the_record_survives_being_written_twice(self):
         mk.save_state(added={"desktop": "/somewhere"})
@@ -339,10 +319,9 @@ class FromTheWindow(Redirected):
             answer = mk.add_from_ui(["desktop"])
         self.assertEqual(answer["error"], "Killed")
 
-    def test_the_window_gets_the_four_hooks_it_looks_for(self):
+    def test_the_window_gets_the_three_hooks_it_looks_for(self):
         self.assertEqual(set(mk.ui_hooks()),
-                         {"shortcut_offer", "shortcut_reopen", "add_shortcut",
-                          "shortcut_never"})
+                         {"shortcut_offer", "add_shortcut", "shortcut_never"})
 
 
 if __name__ == "__main__":

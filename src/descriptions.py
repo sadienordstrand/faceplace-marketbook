@@ -12,7 +12,7 @@ import json
 import time
 
 import paths
-from browser import fmt_dur, goto_with_retry, human_pause
+from browser import goto_with_retry, human_pause
 from listings import SCRIPT_JSON_JS, find_key, iter_json_docs
 
 DEBUG_DIR = paths.DEBUG_DIR
@@ -22,10 +22,6 @@ DEBUG_DIR = paths.DEBUG_DIR
 # on ~7s and ~9s per listing once the fixed page cost below is added.
 PACES = {"fast": (1.0, 2.5), "slow": (3.0, 5.0)}
 DEFAULT_PACE = "fast"
-
-# Minutes of description retrieval to allow before stopping to ask. 0 never
-# asks, which is the default: the estimate is printed either way.
-DEFAULT_DESCRIPTIONS_BUDGET_MIN = 0
 
 # Fixed per-listing costs on top of the pause, from measured runs: ~3.5s to load
 # a detail page and read its payload, plus ~1.5s to fetch and store the photo
@@ -38,34 +34,6 @@ def description_seconds_each(pace, with_thumbs=True):
     lo, hi = PACES[pace]
     return (PAGE_WORK_SECONDS + (PHOTO_SAVE_SECONDS if with_thumbs else 0)
             + (lo + hi) / 2)
-
-
-def confirm_description_count(targets, pace, budget_minutes, assume_yes=False,
-                        with_thumbs=True):
-    """Retrieving descriptions is the expensive stage — a few thousand listings
-    is hours of detail-page visits. Anything over the budget asks first instead
-    of silently committing the evening to it."""
-    per = description_seconds_each(pace, with_thumbs)
-    est = len(targets) * per / 60
-    if assume_yes or not budget_minutes or est <= budget_minutes:
-        return targets
-    fits = max(1, int(budget_minutes * 60 / per))
-    print(f"\n!! Retrieving descriptions for all {len(targets)} listings would "
-          f"take about {fmt_dur(est * 60)} at '{pace}' pacing.")
-    print(f"   The top {fits} by relevance fit inside your "
-          f"{budget_minutes}-minute budget.")
-    try:
-        ans = input(f"   [Enter] top {fits}  /  (a)ll  /  (s)kip descriptions: ").strip().lower()
-    except EOFError:
-        ans = ""
-    if ans.startswith("a"):
-        return targets
-    if ans.startswith("s"):
-        print("   Skipping this stage. Descriptions and local photos will be "
-              "missing.")
-        return []
-    print(f"   Retrieving descriptions for the top {fits}.")
-    return targets[:fits]
 
 
 def detail_from_json(page):
@@ -224,12 +192,14 @@ def retrieve_descriptions(ctx, page, targets, thumbs_path=None, debug_dump=False
         print(f"\n  Interrupted after {len(spent)} of {len(targets)} listings. "
               "Everything gathered so far is saved; finishing up the outputs.")
     finally:
-        # A Windows console sends Ctrl-C to every process sharing it, which
-        # includes Playwright's driver, so by the time we get here the browser
-        # may already be gone and this raises. That exception would replace the
-        # clean return above and take the whole run with it — losing the CSV and
-        # gallery for work that was already done and saved.
-        if routed:
+        # Not after a Ctrl-C. Raised out of a Playwright call, it leaves the
+        # sync API wedged, and the next call into it — this one — never returns
+        # at all: no exception to catch, just a run that stops here forever with
+        # its CSV and gallery unwritten. Nothing needs unrouting anyway once the
+        # stage is over, and on Windows the browser may already be gone besides,
+        # since a console sends Ctrl-C to every process sharing it, Playwright's
+        # driver included.
+        if routed and not interrupted:
             try:
                 page.unroute("**/*")
             except Exception:

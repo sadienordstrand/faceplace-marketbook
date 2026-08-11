@@ -475,8 +475,7 @@ class Restarting(Redirected):
         window = types.SimpleNamespace(collect_settings=lambda *a, **k: answer)
         icons = types.SimpleNamespace(ui_hooks=dict)
         cities = types.SimpleNamespace(load_locations=dict, base_locations=dict)
-        asked = types.SimpleNamespace(query="", exclude="", pace=None,
-                                      descriptions_budget=None)
+        asked = types.SimpleNamespace(query="", exclude="", pace=None)
         with mock.patch.dict(sys.modules, {"settings_ui": window,
                                            "make_desktop_icon": icons}):
             with mock.patch.object(fb, "locations", cities):

@@ -2,10 +2,10 @@
 """
 scheduling.py
 -------------
-Saved searches that run themselves on a schedule and email you the results.
+Searches that run themselves on a schedule and email you the results.
 
     python3 src/scheduling.py --tick          # run whatever is due (what the OS calls)
-    python3 src/scheduling.py --list          # show saved searches and when they run
+    python3 src/scheduling.py --list          # show scheduled searches and when they run
     python3 src/scheduling.py --run NAME      # run one now, ignoring its schedule
     python3 src/scheduling.py --install       # let the OS wake the machine and run ticks
     python3 src/scheduling.py --uninstall
@@ -213,9 +213,12 @@ def describe_interval(interval):
     return f"every {unit}" if n == 1 else f"every {n} {unit}s"
 
 
-# ---------- saved searches ----------
+# ---------- scheduled searches ----------
 DEFAULT_SEARCH = {
     "enabled": True,
+    # queries is the search; query is the same thing on one line, kept because
+    # the reports, the logs and the CSV all want a name for the whole search.
+    "queries": [],
     "query": "",
     "cities": [],
     "exact": False,
@@ -241,6 +244,19 @@ def slugify(s):
     return re.sub(r"[^a-z0-9]+", "_", (s or "").lower()).strip("_") or "search"
 
 
+def normalize_search(search):
+    """Fill in the defaults, and settle what this search is looking for.
+
+    `queries` is the authority and `query` is derived from it, so the two can
+    never drift apart. A search saved before queries existed, or one edited by
+    hand with only a query in it, gets its list from that single line."""
+    rec = {**DEFAULT_SEARCH, **search}
+    rec["queries"] = listings.query_list(
+        rec.get("queries") or rec.get("query"))[:listings.MAX_QUERIES]
+    rec["query"] = listings.query_label(rec["queries"])
+    return rec
+
+
 def load_searches():
     if not SEARCHES_PATH.exists():
         return []
@@ -248,11 +264,11 @@ def load_searches():
         data = json.loads(SEARCHES_PATH.read_text(encoding="utf-8"))
     except (OSError, ValueError) as e:
         # Never silently start from scratch: that would quietly delete every
-        # saved search the moment the file got a stray character in it.
+        # scheduled search the moment the file got a stray character in it.
         raise SystemExit(f"{SEARCHES_PATH.name} is unreadable ({e}). Fix or move "
                          f"the file; it has not been touched.")
     searches = data.get("searches", []) if isinstance(data, dict) else data
-    return [{**DEFAULT_SEARCH, **s} for s in searches]
+    return [normalize_search(s) for s in searches]
 
 
 def save_searches(searches):
@@ -281,7 +297,7 @@ def find_search(searches, ref):
 
 def validate_bounds(search):
     """The price and year ranges, checked the same way the settings window
-    checks them. The window can't be the only guard: a saved search also arrives
+    checks them. The window can't be the only guard: a scheduled search also arrives
     from a hand-edited saved_searches.json, and a range that can't match
     anything runs for just as long as a good one before returning nothing."""
     lo_p, hi_p = search.get("min_price"), search.get("max_price")
@@ -304,13 +320,13 @@ def validate_search(search, searches, editing_id=None):
     name = (search.get("name") or "").strip()
     if not name:
         return "Give the search a name."
-    if not (search.get("query") or "").strip():
-        return "A saved search needs something to search for."
+    if not listings.query_list(search.get("queries") or search.get("query")):
+        return "A scheduled search needs something to search for."
     if not search.get("cities"):
         return "Pick at least one city."
     for s in searches:
         if s.get("id") != editing_id and (s.get("name") or "").lower() == name.lower():
-            return f"You already have a saved search called '{name}'."
+            return f"You already have a scheduled search called '{name}'."
     err = validate_bounds(search)
     if err:
         return err
@@ -329,7 +345,7 @@ def validate_search(search, searches, editing_id=None):
 
 
 def interval_warnings(search, searches):
-    """Advisory only. Frequent sweeps and lots of saved searches are the two
+    """Advisory only. Frequent sweeps and lots of scheduled searches are the two
     things most likely to get an account limited, so say so at the moment
     someone sets one up."""
     out = []
@@ -344,10 +360,16 @@ def interval_warnings(search, searches):
                   if s.get("enabled") and s.get("id") != search.get("id"))
     if enabled + 1 > SAFE_MAX_SEARCHES:
         out.append(
-            f"That would make {enabled + 1} active saved searches. Each one is a "
+            f"That would make {enabled + 1} active scheduled searches. Each one is a "
             f"full sweep of every city you picked, so several of them multiply the "
             f"traffic even on long intervals. Consider keeping fewer, or spacing "
             f"them further apart.")
+    n = len(listings.query_list(search.get("queries") or search.get("query")))
+    if n > 1:
+        out.append(
+            f"This search has {n} queries, and every one of them is a separate "
+            f"sweep of every city — so it takes about {n} times as long, and puts "
+            f"that much more traffic on your Facebook account, each time it runs.")
     return out
 
 
@@ -355,7 +377,8 @@ def add_search(search):
     searches = load_searches()
     # Fill the defaults in before validating, so a caller that only supplies a
     # name, query and cities isn't told its interval is invalid.
-    rec = {**DEFAULT_SEARCH, **{k: v for k, v in search.items() if v is not None}}
+    rec = normalize_search(
+        {k: v for k, v in search.items() if v is not None})
     err = validate_search(rec, searches)
     if err:
         return None, err
@@ -373,8 +396,13 @@ def update_search(search_id, changes):
     searches = load_searches()
     rec = find_search(searches, search_id)
     if not rec:
-        return None, f"No saved search with id '{search_id}'."
+        return None, f"No scheduled search with id '{search_id}'."
     merged = {**rec, **changes}
+    # A caller changing only the one-line query means it: without this, the
+    # queries list it was derived from would win and the change would vanish.
+    if "query" in changes and "queries" not in changes:
+        merged["queries"] = listings.query_list(changes["query"])
+    merged = normalize_search(merged)
     err = validate_search(merged, searches, editing_id=rec.get("id"))
     if err:
         return None, err
@@ -393,7 +421,7 @@ def delete_search(search_id):
     searches = load_searches()
     rec = find_search(searches, search_id)
     if not rec:
-        return None, f"No saved search with id '{search_id}'."
+        return None, f"No scheduled search with id '{search_id}'."
     save_searches([s for s in searches if s.get("id") != rec.get("id")])
     return rec, None
 
@@ -458,13 +486,16 @@ def due_searches(searches, now=None):
 
 
 # ---------- email configuration ----------
+# There is no address to send to in here. Every scheduled search carries its
+# own, chosen when it was made, and a second one at the account level was two
+# places to look for the same answer; a search that never had one falls back to
+# the account's own address, which is the only address this file knows about.
 DEFAULT_EMAIL_CONFIG = {
     "provider": "gmail",
     "host": "",
     "port": 587,
     "address": "",
     "app_password": "",
-    "default_to": "",
 }
 
 
@@ -561,7 +592,7 @@ def send_email(cfg, to, subject, text_body, html_body=None, attachments=(),
     if not email_ready(cfg):
         raise RuntimeError("Email isn't set up yet — add your address and app "
                            "password in the settings window.")
-    to = (to or cfg.get("default_to") or cfg["address"]).strip()
+    to = (to or cfg["address"]).strip()
     msg = EmailMessage()
     msg["From"] = cfg["address"]
     msg["To"] = to
@@ -1003,6 +1034,17 @@ def _listing_line(r):
     return " — ".join(bits)
 
 
+def search_queries(search):
+    """The queries of a scheduled search, whichever field it carries them in."""
+    return listings.query_list(search.get("queries") or search.get("query"))
+
+
+def searched_for(search):
+    """What the search looked for, as a phrase: 'defender 110', or
+    'defender 110' or 'land rover 110' when it has more than one query."""
+    return " or ".join(f"'{q}'" for q in search_queries(search))
+
+
 def build_report(search, summary, next_run=None, warnings=()):
     """Plain text and HTML are built from one set of numbers so they can never
     disagree with each other."""
@@ -1013,7 +1055,7 @@ def build_report(search, summary, next_run=None, warnings=()):
     dur = fmt_dur(summary.get("duration_seconds"))
     sold = [r for r in removed if r.get("removal") == STATUS_SOLD]
     gone = [r for r in removed if r.get("removal") != STATUS_SOLD]
-    name = search.get("name") or search.get("query") or "Saved search"
+    name = search.get("name") or search.get("query") or "Scheduled search"
 
     subject = f"{name}: {len(new_rows)} new, {total} total"
     if removed:
@@ -1025,7 +1067,7 @@ def build_report(search, summary, next_run=None, warnings=()):
     if warnings:
         T.append("")
     T.append(name)
-    T.append(f"Searched for '{search.get('query')}' across "
+    T.append(f"Searched for {searched_for(search)} across "
              f"{_plural(len(search.get('cities') or []), 'city', 'cities')}.")
     T.append(f"Started {fmt_when(started)} and took {dur}.")
     T.append("")
@@ -1058,14 +1100,15 @@ def build_report(search, summary, next_run=None, warnings=()):
                      f"{st.get('cards', 0)} seen")
         T.append("")
 
-    T.append("The full gallery, with every thumbnail, is on your computer at:")
-    T.append(f"  {summary.get('gallery') or summary.get('run_dir')}")
-    T.append("The attached files are stripped-down copies so they fit in an email.")
+    T.append("The attached files are stripped-down copies so they fit in an email, "
+             "and they open anywhere. For the full gallery, with every thumbnail, "
+             "open Faceplace Marketbook on the computer that ran this search and "
+             "go to the Past searches tab.")
     T.append("")
     if next_run:
         T.append(f"Next run: {fmt_when(next_run)}.")
     T.append("To pause or change this search, open Faceplace Marketbook and go to "
-             "the Saved searches tab.")
+             "the Scheduled searches tab.")
 
     html = _report_html(name, search, summary, new_rows, sold, gone, total, dur,
                         started, next_run, warnings)
@@ -1075,6 +1118,51 @@ def build_report(search, summary, next_run=None, warnings=()):
 def _esc(s):
     return (str(s if s is not None else "").replace("&", "&amp;")
             .replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;"))
+
+
+def _file_url(path):
+    """A file:// link to something on this computer, with the spaces and
+    accents in a folder name encoded the way a browser wants them. None rather
+    than a guess if the path isn't absolute: a link to the wrong place is worse
+    than no link, because the path underneath it is still readable."""
+    try:
+        p = Path(path)
+        return p.as_uri() if p.is_absolute() else None
+    except (TypeError, ValueError, OSError):
+        return None
+
+
+def _gallery_html(summary, accent):
+    """The way back to the full-size gallery.
+
+    It lives on one computer, so the link to it is a file:// one, and that only
+    does anything on that machine — clicked from a phone it either does nothing
+    or lands on the browser's own "file not found", and some mail clients strip
+    the link out before it's ever shown. So the link is never the only way
+    back: the attachments open anywhere, and on the machine that ran the search
+    the app lists the run itself, which is a route that survives not having a
+    path to hand.
+    """
+    foot = "color:#6b6b5e;font-size:13px;margin:0 0 8px"
+    attached = ("The attached files are stripped-down copies of the same "
+                "listings, and they open on any device.")
+    url = _file_url(summary.get("gallery"))
+    if not url:
+        return (f'<p style="{foot}">{attached} For the full gallery, open '
+                f'Faceplace Marketbook on the computer that ran this search '
+                f'and go to the <b>Past searches</b> tab.</p>')
+    return (f'<p style="margin:0 0 12px"><a href="{_esc(url)}" '
+            f'style="color:{accent};font-weight:700;text-decoration:none">'
+            f'Open the full gallery &rarr;</a></p>'
+            f'<p style="{foot}">That opens the copy with every photo in it, on '
+            f'the computer that ran this search. Reading this anywhere else, or '
+            f'nothing happens when you click? {attached} You can also open '
+            f'Faceplace Marketbook on that computer and go to the '
+            f'<b>Past searches</b> tab.</p>')
+
+
+def _searched_for_html(search):
+    return " or ".join(f"&lsquo;{_esc(q)}&rsquo;" for q in search_queries(search))
 
 
 def _rows_html(rows, accent):
@@ -1127,19 +1215,16 @@ def _report_html(name, search, summary, new_rows, sold, gone, total, dur, starte
 {warn_html}
 <h1 style="font:700 22px/1.2 Helvetica,Arial,sans-serif;color:{olive};
  margin:0 0 4px">{_esc(name)}</h1>
-<p style="color:#6b6b5e;margin:0 0 20px">&lsquo;{_esc(search.get('query'))}&rsquo;
+<p style="color:#6b6b5e;margin:0 0 20px">{_searched_for_html(search)}
 across {_plural(len(search.get('cities') or []), 'city', 'cities')} &middot; started
 {_esc(fmt_when(started))} &middot; took {_esc(dur)}</p>
 <table style="border-collapse:collapse;margin:0 0 8px"><tr>{stat_html}</tr></table>
 {sections}
 <hr style="border:0;border-top:1px solid #e4e2d6;margin:26px 0 16px">
-<p style="color:#6b6b5e;font-size:13px;margin:0 0 8px">The full gallery, with every
-thumbnail, is on your computer at<br>
-<code style="color:{ink};word-break:break-all">{_esc(summary.get('gallery') or summary.get('run_dir'))}</code><br>
-The attached files are stripped-down copies so they fit in an email.</p>
+{_gallery_html(summary, accent)}
 {next_html}
 <p style="color:#6b6b5e;font-size:13px;margin:0">To pause or change this search,
-open Faceplace Marketbook and go to the <b>Saved searches</b> tab.</p>
+open Faceplace Marketbook and go to the <b>Scheduled searches</b> tab.</p>
 </div></body></html>"""
 
 
@@ -1235,7 +1320,7 @@ def notify_failure(cfg, to, search, kind, detail, next_run=None):
     if next_run:
         body += ["", f"Next attempt: {fmt_when(next_run)}."]
     body += ["", "To pause this search, open Faceplace Marketbook and go to the "
-                 "Saved searches tab."]
+                 "Scheduled searches tab."]
     text = "\n".join(body)
     try:
         send_email(cfg, to, subject, text)
@@ -1244,7 +1329,7 @@ def notify_failure(cfg, to, search, kind, detail, next_run=None):
         log(f"  couldn't send the {kind} email ({e})")
 
 
-# ---------- running one saved search ----------
+# ---------- running one scheduled search ----------
 def archive_previous(run_dir):
     """Keep the numbered history of run.json and the emailed report, so the
     folder itself only ever holds the current results."""
@@ -1272,7 +1357,7 @@ def run_saved_search(search, email_cfg=None, sweep=None, send=True, now=None,
     import fb_marketplace_sweep as fb
 
     email_cfg = email_cfg if email_cfg is not None else load_email_config()
-    to = (search.get("email_to") or "").strip() or email_cfg.get("default_to")
+    to = (search.get("email_to") or "").strip() or email_cfg.get("address")
     started_at = now or now_local()
     late = 0.0 if forced else lateness_hours(search, started_at)
     warnings = []
@@ -1312,13 +1397,14 @@ def run_saved_search(search, email_cfg=None, sweep=None, send=True, now=None,
                 log(f"  skipping {skipped} recently-checked listing(s)")
             return verifier(ctx, due)
 
-        log(f"Running '{search['name']}' ({search.get('query')!r}, "
+        queries = search_queries(search)
+        log(f"Running '{search['name']}' ({searched_for(search)}, "
             f"{len(search.get('cities') or [])} cities)"
             + (f" — {late:.1f}h late" if late >= LATE_AFTER_HOURS else ""))
 
         runner = sweep or fb.run
         summary = runner(
-            search.get("query"), fb.DEFAULT_SCROLLS, bool(search.get("exact")),
+            queries, fb.DEFAULT_SCROLLS, bool(search.get("exact")),
             thumbs_dir=fb.THUMBS_DIRNAME,
             do_descriptions=bool(search.get("do_descriptions", True)),
             do_thumbs=bool(search.get("do_thumbs", True)),
@@ -1328,7 +1414,7 @@ def run_saved_search(search, email_cfg=None, sweep=None, send=True, now=None,
             min_price=search.get("min_price"), max_price=search.get("max_price"),
             min_year=search.get("min_year"), max_year=search.get("max_year"),
             include_no_year=search.get("include_no_year", True),
-            limit=search.get("limit"), assume_yes=True,
+            limit=search.get("limit"),
             only_labels=search.get("cities"), open_gallery=False, no_pause=True,
             run_dir=run_dir, previous_rows=prev_rows, describe_new_only=True,
             verifier=verify_only_stale, login_wait=60, unattended=True)
@@ -1359,8 +1445,12 @@ def run_saved_search(search, email_cfg=None, sweep=None, send=True, now=None,
                 f"If you wanted a wider net, open Faceplace Marketbook and "
                 f"raise the radius.")
         if summary.get("interrupted"):
-            warnings.append("The run was interrupted partway through, so some "
-                            "descriptions and photos are missing.")
+            warnings.append(
+                "The run was stopped partway through, so some of the cities "
+                "were never searched."
+                if summary.get("interrupted_during") == "sweep" else
+                "The run was stopped partway through, so some descriptions and "
+                "photos are missing.")
         unknown = summary.get("unknown_cities") or []
         if unknown:
             # Silence here would be the worst outcome: the report would look
@@ -1416,7 +1506,7 @@ def tick(now=None, sweep=None, send=True, force=None):
     if force:
         rec = find_search(searches, force)
         if not rec:
-            raise SystemExit(f"No saved search called '{force}'.")
+            raise SystemExit(f"No scheduled search called '{force}'.")
         queue = [rec]
     else:
         queue = due_searches(searches, now)
@@ -1430,7 +1520,8 @@ def tick(now=None, sweep=None, send=True, force=None):
             log(f"{len(queue)} search{'' if len(queue) == 1 else 'es'} to run: "
                 + ", ".join(s["name"] for s in queue))
             for i, search in enumerate(queue):
-                to = (search.get("email_to") or "").strip() or email_cfg.get("default_to")
+                to = ((search.get("email_to") or "").strip()
+                      or email_cfg.get("address"))
                 try:
                     results.append(run_saved_search(
                         search, email_cfg, sweep=sweep, send=send, now=now,
@@ -1700,7 +1791,7 @@ def win_task_xml():
     return f"""<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.3" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
-    <Description>Runs Faceplace Marketbook saved searches when they are due.</Description>
+    <Description>Runs Faceplace Marketbook scheduled searches when they are due.</Description>
   </RegistrationInfo>
   <Triggers>
     <TimeTrigger>
@@ -1749,7 +1840,7 @@ def uninstall_schedule():
         _run(["launchctl", "bootout", f"gui/{os.getuid()}/{MAC_LABEL}"])
         _run(["launchctl", "unload", str(plist_path())])
         plist_path().unlink(missing_ok=True)
-        msgs.append("Automatic runs are off. Your saved searches are untouched — "
+        msgs.append("Automatic runs are off. Your scheduled searches are untouched — "
                     "you can still run them by hand.")
         if not _pmset_as_admin(["repeat", "cancel"]):
             msgs.append("The daily 5am wake couldn't be removed without your "
@@ -1758,7 +1849,7 @@ def uninstall_schedule():
         return True, msgs
     if system == "windows":
         _run(["schtasks", "/delete", "/tn", WIN_TASK, "/f"])
-        msgs.append("Automatic runs are off. Your saved searches are untouched.")
+        msgs.append("Automatic runs are off. Your scheduled searches are untouched.")
         return True, msgs
     return False, ["Nothing to uninstall on this platform."]
 
@@ -1819,16 +1910,16 @@ def schedule_problems():
 
 # ---------- what the settings window calls ----------
 # Only these come from the search form. Anything else the form collects
-# (debug_dump, do_gallery, the budget prompt) is about one interactive run and
-# has no meaning for something that runs unattended at 5am.
-SAVED_FIELDS = ("query", "cities", "exact", "min_price", "max_price",
+# (debug_dump) is about one interactive run and has no meaning for something
+# that runs unattended at 5am.
+SAVED_FIELDS = ("queries", "query", "cities", "exact", "min_price", "max_price",
                 "min_year", "max_year", "include_no_year", "exclude",
                 "do_descriptions", "do_thumbs", "pace", "limit", "interval",
                 "email_to", "name", "enabled")
 
 
 def searches_for_ui():
-    """Saved searches with their times already turned into readable phrases, so
+    """Scheduled searches with their times already turned into readable phrases, so
     the window doesn't have to reimplement any of the schedule arithmetic."""
     searches = load_searches()
     tracking = {}
@@ -1861,6 +1952,11 @@ def _from_form(payload):
     iv = rec.get("interval") or {}
     rec["interval"] = {"every": int(iv.get("every") or 1),
                        "unit": iv.get("unit") or "days"}
+    # The form sends the boxes it has; the one-line version is ours to derive,
+    # never the window's to send.
+    if "queries" in rec:
+        rec["queries"] = listings.query_list(rec["queries"])[:listings.MAX_QUERIES]
+        rec["query"] = listings.query_label(rec["queries"])
     return rec
 
 
@@ -1869,6 +1965,16 @@ def ui_hooks():
     dict; an "error" key is shown to the user and nothing else happens."""
 
     def save_search(payload):
+        # A scheduled search's whole output is an email. Letting one be saved before
+        # there's an account to send it from produced searches that ran on time,
+        # found things, and told nobody — and the step that was skipped is two
+        # tabs away, so nothing about the silence pointed back at it.
+        if not email_ready():
+            return {"error": "Set your email up first, on the Email & Setup "
+                             "tab. A scheduled search reports what it found by "
+                             "email, so there's nothing for one to do until it "
+                             "can send you mail.",
+                    "email_ready": False}
         rec = _from_form(payload)
         editing = payload.get("id")
         if editing:
@@ -1886,7 +1992,7 @@ def ui_hooks():
         msgs = [what]
         if not schedule_installed():
             msgs.append("Automatic runs are still off — turn them on from the "
-                        "Email & schedule tab, or this won't run on its own.")
+                        "Email & Setup tab, or this won't run on its own.")
         elif os_name() == "darwin":
             rearm_wake()
         return {"message": " ".join(msgs),
@@ -1918,31 +2024,36 @@ def ui_hooks():
             # Switching back to a known provider must clear a custom server, or
             # the old host would silently keep winning.
             merged["host"] = ""
-        if not merged.get("default_to"):
-            merged["default_to"] = merged.get("address") or ""
+        # A config written when there was a "send reports to" box still has the
+        # address it held. Nothing reads it now, so it goes on the next save
+        # rather than sitting in the file looking like a setting.
+        merged.pop("default_to", None)
         # Checked before saving, because the alternative is a mistyped address
         # sitting in a file until a run at 5am fails on it — and a bad address
         # fails as "the server rejected that password", which sends you looking
         # in the wrong place entirely.
-        for value, what in ((merged.get("address"), "Your email address"),
-                            (merged.get("default_to"), "The address to send to")):
-            problem = address_problem(value, what)
-            if problem:
-                return {"error": f"{problem} Nothing was saved."}
+        problem = address_problem(merged.get("address"), "Your email address")
+        if problem:
+            return {"error": f"{problem} Nothing was saved."}
         save_email_config(merged)
+        # Whether scheduled searches are usable now hangs on this, so every answer
+        # says which of the two states it left behind rather than only the
+        # happy one.
         if not email_ready(merged):
             return {"error": "Saved, but there's no address and app password yet, "
-                             "so reports can't be sent."}
-        note = (f"Saved. Reports will come from {merged['address']} to "
-                f"{merged['default_to']}. Send a test message to be sure it "
-                f"works.")
-        return {"message": " ".join([note] + email_remarks(merged))}
+                             "so reports can't be sent.",
+                    "ready": False}
+        note = (f"Saved. Reports will be sent from {merged['address']}, to "
+                f"whichever address each scheduled search asks for. Send a "
+                f"test message to be sure it works.")
+        return {"message": " ".join([note] + email_remarks(merged)),
+                "ready": True}
 
     def test_email():
         cfg = load_email_config()
         if not email_ready(cfg):
             return {"error": "Add your address and app password first, then Save."}
-        to = cfg.get("default_to") or cfg["address"]
+        to = cfg["address"]
         try:
             send_email(cfg, to, "Faceplace Marketbook: test message",
                        "If you're reading this, scheduled reports will "
@@ -1950,17 +2061,13 @@ def ui_hooks():
         except Exception as e:
             return {"error": f"Couldn't send it: {_smtp_hint(e, cfg)}"}
         note = f"Sent to {to}."
-        if _self_send(cfg, to):
-            note += (" One Gmail quirk: mail you send to yourself is sometimes "
-                     "filed under Sent Mail instead of the inbox, so look there "
-                     "too. Sending reports to a different address avoids it.")
         return {"message": note}
 
     def state():
         installed = schedule_installed()
         if os_name() == "other":
             hint = ("Automatic runs can only be set up on macOS and Windows. You "
-                    "can still run saved searches by hand.")
+                    "can still run scheduled searches by hand.")
         elif installed:
             nxt = earliest_next_run()
             hint = (f"This computer checks for due searches every "
@@ -1984,13 +2091,20 @@ def ui_hooks():
         ok, msgs = install_schedule() if on else uninstall_schedule()
         return {"ok": ok, "messages": msgs}
 
+    def email_for_ui():
+        # The window opens knowing whether scheduled searches are usable, so the
+        # tabs that offer them are in the right state before anything is
+        # clicked rather than after the first refusal.
+        cfg = load_email_config()
+        return {**cfg, "ready": email_ready(cfg)}
+
     return {
         "list_searches": searches_for_ui,
         "save_search": save_search,
         "update_search": do_update,
         "delete_search": do_delete,
         "check_schedule": check,
-        "email_config": load_email_config,
+        "email_config": email_for_ui,
         "save_email": save_email,
         "test_email": test_email,
         "schedule_state": state,
@@ -2032,13 +2146,13 @@ def _smtp_hint(e, cfg=None):
 def cmd_list():
     searches = load_searches()
     if not searches:
-        print("No saved searches yet. Make one in the settings window.")
+        print("No scheduled searches yet. Make one in the settings window.")
         return
     print(f"Automatic runs: {'on' if schedule_installed() else 'off'}\n")
     for s in searches:
         state = "paused" if not s.get("enabled") else describe_interval(s["interval"])
         print(f"{s['name']}  [{state}]")
-        print(f"    {s.get('query')!r} across {len(s.get('cities') or [])} cities")
+        print(f"    {searched_for(s)} across {len(s.get('cities') or [])} cities")
         print(f"    last run {fmt_when(parse_iso(s.get('last_started')))}, "
               f"next {fmt_when(parse_iso(s.get('next_run')))}")
         if s.get("email_to"):
@@ -2050,16 +2164,12 @@ def cmd_test_email():
     if not email_ready(cfg):
         raise SystemExit("Email isn't set up. Add your address and app password "
                          "in the settings window first.")
-    to = cfg.get("default_to") or cfg["address"]
+    to = cfg["address"]
     send_email(cfg, to, "Faceplace Marketbook: test message",
                "If you're reading this, scheduled reports will reach you.\n\n"
                "Sent by Faceplace Marketbook's email test.")
     print(f"Sent to {to}.")
-    if _self_send(cfg, to):
-        print("Because you're sending to the same Gmail account you're sending\n"
-              "from, the copy may be filed under Sent Mail instead of your\n"
-              "inbox, so look there too. Sending reports to a different address\n"
-              "avoids that.")
+
 
 
 def cmd_verify_probe(urls):
@@ -2083,13 +2193,14 @@ def cmd_verify_probe(urls):
 
 def main():
     ap = argparse.ArgumentParser(
-        description="Saved searches that run themselves and email you the results.")
+        description="Searches that run themselves on a schedule and email you "
+                    "the results.")
     ap.add_argument("--tick", action="store_true",
-                    help="run every saved search that is due (what the OS calls)")
+                    help="run every scheduled search that is due (what the OS calls)")
     ap.add_argument("--run", metavar="NAME",
-                    help="run one saved search now, ignoring its schedule")
+                    help="run one scheduled search now, ignoring its schedule")
     ap.add_argument("--list", action="store_true", dest="do_list",
-                    help="show saved searches and when they run next")
+                    help="show scheduled searches and when they run next")
     ap.add_argument("--install", action="store_true",
                     help="let the OS wake this computer and run searches")
     ap.add_argument("--uninstall", action="store_true", help="turn automatic runs off")

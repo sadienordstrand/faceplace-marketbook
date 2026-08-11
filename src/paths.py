@@ -10,7 +10,7 @@ Two of them are easy to confuse:
             the virtualenv, the runs, and everything the app writes
 
 Under ROOT sits .state/, holding what the app maintains for itself: the browser
-profile with the Facebook login, the cumulative database, saved searches, the
+profile with the Facebook login, the cumulative database, scheduled searches, the
 email settings, your own cities, the update check's notes, and the scheduler's
 lock and log.
 

@@ -31,7 +31,7 @@ def write_csv(rows, path, fields=FIELDS):
             w.writerow({k: r.get(k, "") for k in fields})
 
 
-# Tables that only scheduled saved searches use. Kept apart from `listings` so
+# Tables that only scheduled searches use. Kept apart from `listings` so
 # the FIELDS list stays exactly the CSV's columns.
 SCHEDULE_SCHEMA = (
     # Per-listing bookkeeping: what we've already paid to fetch, and whether the
@@ -115,12 +115,18 @@ def slugify(s):
     return re.sub(r"[^a-z0-9]+", "_", (s or "").lower()).strip("_") or "search"
 
 
+# A search can OR several queries together, and all of them spelled out would
+# make a folder name nobody can read. The whole search is recorded in run.json.
+SLUG_MAX = 60
+
+
 def make_run_dir(query, base=None):
     """runs/<query-slug>_<mm-dd-yyyy>, suffixed _1, _2, ... so a run can never
     overwrite an earlier one."""
     parent = (base or RUNS_DIR)
     parent.mkdir(parents=True, exist_ok=True)
-    stem = f"{slugify(query)}_{datetime.now().strftime('%m-%d-%Y')}"
+    slug = slugify(query)[:SLUG_MAX].strip("_") or "search"
+    stem = f"{slug}_{datetime.now().strftime('%m-%d-%Y')}"
     d = parent / stem
     n = 0
     while d.exists():
@@ -161,7 +167,7 @@ def reconcile_with_previous(all_rows, prev_by_id, gone_ids, score=None):
 
 
 def saved_run_dir(name, base=None):
-    """runs/saved/<name-slug>/ — one stable folder per saved search, rewritten in
+    """runs/saved/<name-slug>/ — one stable folder per scheduled search, rewritten in
     place every run. A scheduled search that made a new dated folder every hour
     would bury the results it's meant to surface."""
     d = (base or (RUNS_DIR / "saved")) / slugify(name)

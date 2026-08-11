@@ -9,6 +9,11 @@ const SHORTCUT = __SHORTCUT__;
 // The shortcut offer sits over everything, so while it's up it owns the
 // keyboard. Declared here because the key handlers below consult it.
 let shortcutOpen = false;
+// Whether this computer can send mail yet. A scheduled search that can't email is
+// a search whose results nobody ever sees, so this decides whether the save
+// block on the search tab is usable at all. Declared up here because refresh()
+// consults it on every keystroke.
+let emailReady = !!EMAIL.ready;
 // Fixed per-listing costs no pace setting can remove: loading the page and
 // reading its payload, plus saving the photo when thumbnails are on.
 const PAGE_WORK = DEFAULTS.page_work || 3.5;
@@ -17,6 +22,53 @@ const PHOTO_SAVE = DEFAULTS.photo_save || 1.5;
 const $ = id => document.getElementById(id);
 const secsPer = (p, withThumbs) =>
   PAGE_WORK + (withThumbs ? PHOTO_SAVE : 0) + (PACES[p][0] + PACES[p][1]) / 2;
+
+// Queries. A search can be several of them, OR'd: a listing is kept if it has
+// every word of any one. The first box lives in the markup, so it keeps the id
+// the rest of the window reaches for; the others are built here.
+const MAX_QUERIES = DEFAULTS.max_queries || 5;
+const queryList = $('queryList');
+const queryBoxes = () => [...queryList.querySelectorAll('.qbox')];
+
+function addQueryBox(value) {
+  if (queryBoxes().length >= MAX_QUERIES) return null;
+  const wrap = document.createElement('div');
+  // The OR and the box it introduces are one element, so removing a query takes
+  // its OR with it and never leaves one dangling at the end of the list.
+  wrap.className = 'qmore';
+  wrap.innerHTML = '<div class="qor">or</div>'
+    + '<div class="qrow"><input type="text" class="qbox"'
+    + ' placeholder="something else"><button class="qx"'
+    + ' title="Remove this query">✕</button></div>';
+  queryList.appendChild(wrap);
+  const box = wrap.querySelector('.qbox');
+  if (value) box.value = value;
+  box.addEventListener('input', refresh);
+  refresh();
+  return box;
+}
+
+// Used when a scheduled search is loaded back in, so the boxes match what it holds
+// rather than whatever the form was left on.
+function setQueries(list) {
+  queryList.querySelectorAll('.qmore').forEach(el => el.remove());
+  const vals = (list || []).map(q => (q || '').trim()).filter(Boolean);
+  $('query').value = vals[0] || '';
+  vals.slice(1).forEach(v => addQueryBox(v));
+  refresh();
+}
+
+$('addQuery').onclick = () => {
+  const box = addQueryBox();
+  if (box) box.focus();
+};
+
+queryList.addEventListener('click', e => {
+  const x = e.target.closest('.qx');
+  if (!x) return;
+  x.closest('.qmore').remove();
+  refresh();
+});
 
 // Cities
 const cityWrap = $('cities');
@@ -48,11 +100,11 @@ const selectedCities = () => new Set([...cityWrap.querySelectorAll('.tog')]
   .map(t => t.dataset.city));
 renderCities(LOCATIONS);
 
-function sayCity(msg, bad) {
-  const el = $('addCityMsg');
-  el.textContent = msg;
-  el.classList.toggle('bad', !!bad);
-}
+// Adding or removing a city changes a list the user keeps, so it's answered
+// with the same green note that saving a search gets. The grey hint above it
+// stays put: it's instructions, and an answer written into it reads as more of
+// the same rather than as something that just happened.
+function sayCity(msg, kind) { say('cityMsg', msg, kind); }
 
 $('addCity').onclick = async () => {
   const btn = $('addCity'), label = $('new_city_label').value.trim();
@@ -61,13 +113,13 @@ $('addCity').onclick = async () => {
   sayCity('Adding…');
   const res = await window.pyAddCity(label, url);
   btn.disabled = false;
-  if (res.error) { sayCity(res.error, true); return; }
+  if (res.error) { sayCity(res.error, 'bad'); return; }
   const keep = selectedCities();
   res.cities.filter(c => !LOCATIONS.includes(c)).forEach(c => keep.add(c));
   LOCATIONS.length = 0; LOCATIONS.push(...res.cities);
   renderCities(res.cities, keep);
   $('new_city_label').value = ''; $('new_city_url').value = '';
-  sayCity(`Added ${res.added}. It'll be here next time too.`);
+  sayCity(`Added ${res.added}.`, 'ok');
   refresh();
 };
 ['new_city_label', 'new_city_url'].forEach(id =>
@@ -87,7 +139,7 @@ cityWrap.addEventListener('click', async e => {
   if (!res.error) keep.delete(label);
   LOCATIONS.length = 0; LOCATIONS.push(...res.cities);
   renderCities(res.cities, keep);
-  sayCity(res.error || `Removed ${label}.`, !!res.error);
+  sayCity(res.error || `Removed ${label}.`, res.error ? 'bad' : 'ok');
   refresh();
 });
 $('allCities').onclick = () => {
@@ -136,9 +188,14 @@ const LATEST_YEAR = new Date().getFullYear() + 1;
   $(id).max = LATEST_YEAR;
 });
 
+// The four boxes filterProblems() has something to say about. Leaving one is
+// what puts the number up for judgement, so each has to ask for another look.
+const RANGE_BOXES = ['min_price', 'max_price', 'min_year', 'max_year'];
+RANGE_BOXES.forEach(id => $(id).addEventListener('blur', refresh));
+
 function collect() {
   return {
-    query: $('query').value.trim(),
+    queries: queryBoxes().map(b => b.value.trim()).filter(Boolean),
     cities: [...cityWrap.querySelectorAll('.tog')]
       .filter(t => t.getAttribute('aria-pressed') === 'true')
       .map(t => t.dataset.city),
@@ -151,11 +208,9 @@ function collect() {
     exclude: $('exclude').value.trim(),
     do_descriptions: on('do_descriptions'),
     do_thumbs: on('do_thumbs'),
-    do_gallery: on('do_gallery'),
     debug_dump: on('debug_dump'),
     pace: pace,
     limit: num('limit'),
-    descriptions_budget: num('descriptions_budget'),
   };
 }
 
@@ -163,16 +218,67 @@ function collect() {
 // because the sweep it starts looks exactly like a successful one that simply
 // found nothing — an hour of scrolling, then an empty gallery.
 function filterProblems(c) {
+  // Whichever box is being typed in sits out the check: "1995" is "1", then
+  // "19", then "199" on the way, and a complaint that appears and clears itself
+  // between keystrokes is noise. Leaving the box settles the number.
+  const typing = document.activeElement ? document.activeElement.id : '';
+  const val = id => (id === typing ? null : c[id]);
+  const minPrice = val('min_price'), maxPrice = val('max_price');
+  const minYear = val('min_year'), maxYear = val('max_year');
   const out = [];
-  if (c.min_price < 0 || c.max_price < 0) out.push("A price can't be negative.");
-  if (c.min_price != null && c.max_price != null && c.min_price > c.max_price)
+  if (minPrice < 0 || maxPrice < 0) out.push("A price can't be negative.");
+  if (minPrice != null && maxPrice != null && minPrice > maxPrice)
     out.push('The minimum price is higher than the maximum price.');
   const badYear = y => y != null && (y < EARLIEST_YEAR || y > LATEST_YEAR);
-  if (badYear(c.min_year) || badYear(c.max_year))
+  if (badYear(minYear) || badYear(maxYear))
     out.push(`Years have to be between ${EARLIEST_YEAR} and ${LATEST_YEAR}.`);
-  if (c.min_year != null && c.max_year != null && c.min_year > c.max_year)
+  if (minYear != null && maxYear != null && minYear > maxYear)
     out.push('The minimum year is later than the maximum year.');
   return out;
+}
+
+// "$5,000–$40,000", "$5,000 and up", "up to $40,000" — and nothing at all when
+// neither end of the range was given. A one-sided year reads differently from a
+// one-sided price, so each end's wording comes from the caller.
+function rangeText(lo, hi, fmt, low, high) {
+  if (lo != null && hi != null) return `${fmt(lo)}–${fmt(hi)}`;
+  if (lo != null) return low(fmt(lo));
+  if (hi != null) return high(fmt(hi));
+  return '';
+}
+
+// Everything that changes what this search will do, in the order the form asks
+// for it. By the time it's filled in, the cards this describes are several
+// screens tall, so the footer is the one place the whole search can be read at
+// once — worth more than the seconds-per-listing figure that used to be here,
+// which the pace control says itself, right beside the choice.
+function summary(c) {
+  const bits = [];
+  const count = (n, one, many) => `<b>${n}</b> ${n === 1 ? one : many}`;
+  if (c.queries.length)
+    bits.push(c.queries.map(q => `“${escHtml(q)}”`).join(' or '));
+  if (c.exact) bits.push('exact matching');
+  bits.push(count(c.cities.length, 'city', 'cities'));
+  const price = rangeText(c.min_price, c.max_price, n => '$' + n.toLocaleString(),
+                          s => `${s} and up`, s => `up to ${s}`);
+  const years = rangeText(c.min_year, c.max_year, String,
+                          s => `${s} and later`, s => `${s} and earlier`);
+  if (price) bits.push(`<b>${price}</b>`);
+  if (years) bits.push(`<b>${years}</b>`);
+  if (!c.include_no_year) bits.push('no undated listings');
+  const excluded = c.exclude.split(',').filter(t => t.trim()).length;
+  if (excluded) bits.push(count(excluded, 'excluded term', 'excluded terms'));
+  if (!c.do_descriptions && !c.do_thumbs) bits.push('no descriptions or thumbnails');
+  else if (!c.do_descriptions) bits.push('no descriptions');
+  else if (!c.do_thumbs) bits.push('no thumbnails');
+  if (c.debug_dump) bits.push('save raw payloads');
+  if (c.do_descriptions) {
+    // No cap is the default, and a summary that recites the defaults back is
+    // just noise to read past on the way to what was actually changed.
+    if (c.limit) bits.push(count(c.limit, 'description max', 'descriptions max'));
+    bits.push(`<b>${pace}</b> retrieval`);
+  }
+  return bits;
 }
 
 function refresh() {
@@ -184,25 +290,37 @@ function refresh() {
   });
   // The whole block is meaningless with description retrieval off.
   $('descBlock').hidden = !c.do_descriptions;
-  const parts = [`<b>${c.cities.length}</b> ${c.cities.length === 1 ? 'city' : 'cities'}`];
-  if (c.do_descriptions) {
-    parts.push(`<b>${Math.round(secsPer(pace, c.do_thumbs))}s</b> per listing`);
-    parts.push(c.limit ? `<b>${c.limit}</b> max` : `<b>all</b> listings`);
-  } else parts.push('no descriptions');
-  // The filters are far enough up the page to be off-screen, so the footer has
-  // to say why the button it sits next to went dead.
   const problems = filterProblems(c);
   say('filterMsg', problems.join(' '), 'bad');
-  $('est').innerHTML = parts.join(' &middot; ')
-    + (c.query ? '' : ' &middot; <span class="warn">query required</span>')
-    + (problems.length ? ' &middot; <span class="warn">check the filters</span>' : '');
-  $('start').disabled = !c.query || c.cities.length === 0 || problems.length > 0;
-  $('saveSearch').disabled = problems.length > 0;
+  // Every reason the button can be dead is named here. The setting behind it is
+  // usually scrolled off the top of the window by the time anyone reaches for
+  // Start Search, so a greyed-out button with nothing beside it reads as a
+  // broken one rather than as a step that was missed.
+  const warns = [];
+  if (!c.queries.length) warns.push('query required');
+  if (!c.cities.length) warns.push('select at least one city');
+  if (problems.length) warns.push('fix quality filters');
+  $('est').innerHTML = summary(c)
+    .concat(warns.map(w => `<span class="warn">${w}</span>`))
+    .join(' &middot; ');
+  $('start').disabled = warns.length > 0;
+  $('saveSearch').disabled = problems.length > 0 || !emailReady;
+  $('addQuery').disabled = queryBoxes().length >= MAX_QUERIES;
 }
 
 $('query').addEventListener('input', refresh);
-['min_price','max_price','min_year','max_year','exclude','limit',
- 'descriptions_budget'].forEach(id => $(id).addEventListener('input', refresh));
+['min_price', 'max_price', 'min_year', 'max_year', 'exclude', 'limit']
+  .forEach(id => $(id).addEventListener('input', refresh));
+
+// A link here goes to the everyday browser, never to this window: this one is
+// Playwright's, so it has no address bar to get back from, isn't logged into
+// Facebook, and closes the moment a search starts.
+document.addEventListener('click', e => {
+  const a = e.target.closest('a[href^="http"]');
+  if (!a) return;
+  e.preventDefault();
+  window.pyOpenLink(a.href);
+});
 
 $('start').onclick = () => {
   $('start').disabled = true;
@@ -211,31 +329,40 @@ $('start').onclick = () => {
 $('cancel').onclick = () => window.pyCancel();
 document.addEventListener('keydown', e => {
   // Escape has to put the shortcut offer away rather than abandon the window
-  // sitting behind it, and Start sweep isn't reachable until it's answered.
+  // sitting behind it, and Start Search isn't reachable until it's answered.
   if (shortcutOpen) {
     if (e.key === 'Escape') { e.preventDefault(); $('shortcutSkip').click(); }
     return;
   }
-  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !$('start').disabled
-      && tab === 'new') $('start').click();
+  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && tab === 'new') {
+    // Clicking Start leaves whatever box was being typed in, which is what
+    // hands a half-typed price or year over to be checked. This shortcut never
+    // leaves it, so it lets go of the box first and reads the answer after.
+    if (RANGE_BOXES.includes(document.activeElement.id))
+      document.activeElement.blur();
+    if (!$('start').disabled) $('start').click();
+  }
   if (e.key === 'Escape') window.pyCancel();
 });
 
 // ---------------------------------------------------------------- tabs
 let tab = 'new';
-const PANES = {new: 'paneNew', saved: 'paneSaved', email: 'paneEmail'};
-const TABS = {new: 'tabNew', saved: 'tabSaved', email: 'tabEmail'};
+const PANES = {new: 'paneNew', saved: 'paneSaved', past: 'panePast',
+               email: 'paneEmail'};
+const TABS = {new: 'tabNew', saved: 'tabSaved', past: 'tabPast',
+              email: 'tabEmail'};
 
 function showTab(which) {
   tab = which;
   Object.entries(PANES).forEach(([k, id]) => { $(id).hidden = k !== which; });
   Object.entries(TABS).forEach(([k, id]) =>
     $(id).setAttribute('aria-selected', k === which ? 'true' : 'false'));
-  // Start sweep only means something on the search tab.
+  // Start Search only means something on the search tab.
   $('start').hidden = which !== 'new';
   $('est').hidden = which !== 'new';
   $('cancel').textContent = which === 'new' ? 'Cancel' : 'Close';
   if (which === 'saved') renderSaved();
+  if (which === 'past') loadRuns();
   if (which === 'email') loadSchedState();
 }
 Object.entries(TABS).forEach(([k, id]) => { $(id).onclick = () => showTab(k); });
@@ -251,10 +378,39 @@ function say(id, msg, kind) {
 UNITS.forEach(u => {
   const o = document.createElement('option');
   o.value = u;
-  o.textContent = u.charAt(0).toUpperCase() + u.slice(1);
   $('save_unit').appendChild(o);
 });
 $('save_unit').value = UNITS.includes('days') ? 'days' : UNITS[0];
+
+// The number and the unit beside it are read as one phrase, so "every 1 days"
+// has to become "every 1 day". Only the labels change; the values the scheduler
+// is given are always the plural ones it stores. Lower case, because the CSS
+// puts the chosen one in capitals and leaves the open list as written.
+function labelUnits() {
+  const one = Number($('save_every').value) === 1;
+  [...$('save_unit').options].forEach(o => {
+    o.textContent = one ? o.value.replace(/s$/, '') : o.value;
+  });
+}
+
+// A whole count of hours or days is the only thing the scheduler will take, and
+// a number box hands over '0', '-1' and '2.5' just as readily, so those are
+// corrected as they're typed rather than refused later. A box emptied to be
+// retyped is left alone until focus leaves it.
+function fixEvery(final) {
+  const box = $('save_every');
+  if (box.value === '' && !final) return;
+  const whole = String(Math.max(1, Math.floor(Number(box.value) || 1)));
+  if (whole !== box.value) box.value = whole;
+}
+
+// Relabelling happens once the number is settled, not on every keystroke:
+// typing "10" passes through "1", and a unit that flicks to "day" and back to
+// "days" between two keystrokes reads as a glitch.
+$('save_every').addEventListener('input', () => fixEvery());
+$('save_every').addEventListener('change', labelUnits);
+$('save_every').addEventListener('blur', () => { fixEvery(true); labelUnits(); });
+labelUnits();
 
 let editingId = null;
 
@@ -281,6 +437,9 @@ $('saveSearch').onclick = async () => {
   const payload = {...collect(), ...scheduleFields(), id: editingId};
   const res = await window.pySaveSearch(payload);
   btn.disabled = false;
+  // Email can have been taken away since this window opened, in which case the
+  // refusal is also the news that this block should have been shut.
+  if (res.email_ready === false) setEmailReady(false);
   if (res.error) { say('saveMsg', res.error, 'bad'); return; }
   say('saveWarn', (res.warnings || []).join(' '), 'bad');
   say('saveMsg', res.message, 'ok');
@@ -290,7 +449,7 @@ $('saveSearch').onclick = async () => {
 
 function startEditing(s) {
   editingId = s.id;
-  $('query').value = s.query || '';
+  setQueries(s.queries && s.queries.length ? s.queries : [s.query || '']);
   $('exclude').value = s.exclude || '';
   $('min_price').value = s.min_price == null ? '' : s.min_price;
   $('max_price').value = s.max_price == null ? '' : s.max_price;
@@ -306,13 +465,16 @@ function startEditing(s) {
     s.do_thumbs === false ? 'false' : 'true');
   pace = s.pace || 'fast';
   $('save_name').value = s.name || '';
-  $('save_email').value = s.email_to || '';
+  // A search saved before this box existed has no address of its own and has
+  // been reporting to the account's own address, so that's what it shows.
+  $('save_email').value = s.email_to || reportsTo();
   $('save_every').value = (s.interval && s.interval.every) || 1;
   $('save_unit').value = (s.interval && s.interval.unit) || 'days';
+  labelUnits();
   const keep = new Set(s.cities || []);
   cityWrap.querySelectorAll('.tog').forEach(t =>
     t.setAttribute('aria-pressed', keep.has(t.dataset.city) ? 'true' : 'false'));
-  $('saveSearch').textContent = 'Update saved search';
+  $('saveSearch').textContent = 'Update scheduled search';
   $('cancelEdit').hidden = false;
   say('saveMsg', `Editing “${s.name}”. Change anything above, then update it.`);
   showTab('new');
@@ -327,12 +489,14 @@ function stopEditing() {
 }
 $('cancelEdit').onclick = () => { stopEditing(); say('saveMsg', ''); };
 
-// ------------------------------------------------------- the saved searches list
+// ------------------------------------------------------- the scheduled searches list
 function renderSaved() {
   const wrap = $('savedList');
   if (!SAVED.length) {
-    wrap.innerHTML = '<div class="empty">No saved searches yet. Set one up at '
-      + 'the bottom of the New search tab.</div>';
+    wrap.innerHTML = '<div class="empty">No scheduled searches yet. '
+      + (emailReady ? 'Set one up at the bottom of the New Search tab.'
+                    : 'To create one, first set up your email on the Email & Setup tab.')
+      + '</div>';
     return;
   }
   wrap.innerHTML = SAVED.map(s => `
@@ -343,7 +507,9 @@ function renderSaved() {
           s.enabled ? escHtml(s.every_text) : 'paused'}</span>
       </div>
       <div class="det">
-        “${escHtml(s.query)}” across ${(s.cities || []).length} ${
+        ${((s.queries && s.queries.length ? s.queries : [s.query || ''])
+            .map(q => `“${escHtml(q)}”`).join(' or '))} across ${
+          (s.cities || []).length} ${
           (s.cities || []).length === 1 ? 'city' : 'cities'}<br>
         Last run ${escHtml(s.last_text)} &middot; next ${escHtml(s.next_text)}<br>
         ${s.tracking == null ? '' : escHtml(String(s.tracking)) + ' listings tracked'}
@@ -404,7 +570,7 @@ $('savedList').addEventListener('click', async e => {
     SAVED.length = 0; SAVED.push(...(res.searches || []));
     if (editingId === id) stopEditing();
     renderSaved();
-    say('savedMsg', `Deleted “${s.name}”. Its results folder is still on disk.`,
+    say('savedMsg', `Deleted “${s.name}”. Its results are still available in the Past Searches tab.`,
         'ok');
   }
 });
@@ -413,7 +579,6 @@ $('savedList').addEventListener('click', async e => {
 function fillMail(cfg) {
   $('mail_address').value = cfg.address || '';
   $('mail_password').value = cfg.app_password || '';
-  $('mail_to').value = cfg.default_to || '';
   $('mail_provider').value = cfg.provider || 'gmail';
   $('mail_host').value = cfg.host || '';
   $('mail_port').value = cfg.port || '';
@@ -423,18 +588,73 @@ function mailHostRow() {
   $('mailHostRow').hidden = $('mail_provider').value !== 'other';
 }
 $('mail_provider').addEventListener('change', mailHostRow);
-fillMail(EMAIL);
+
+// Where a report would go unless a search says otherwise: the account sending
+// it. Read off the box, which starts out holding whatever was last saved.
+function reportsTo() {
+  return $('mail_address').value.trim();
+}
+
+// The address a new scheduled search will report to, written into the box rather
+// than left blank under a note explaining what a blank would mean. Only ever
+// filled when there's nothing there, so an address typed by hand — or one
+// loaded from a search being edited — is never overwritten.
+function fillReportTo() {
+  if (!$('save_email').value.trim()) $('save_email').value = reportsTo();
+}
+
+// Everything that changes when email starts or stops working. Scheduled searches
+// are the only thing email is for, so the two tabs that offer them say plainly
+// which of the two states they're in rather than failing later.
+function setEmailReady(ready) {
+  emailReady = !!ready;
+  // Where a report lands is each search's own business, so this says where one
+  // would come from, which is the part this tab actually decides.
+  const from = $('mail_address').value.trim();
+  $('mailDot').className = 'dot' + (emailReady ? ' on' : '');
+  $('mailState').textContent = emailReady
+    ? `Email is set up${from ? ', sending from ' + from : ''}`
+    : 'Email isn\'t set up yet';
+  $('saveNeedsEmail').hidden = emailReady;
+  $('savedNeedsEmail').hidden = emailReady;
+  $('saveFields').classList.toggle('gated', !emailReady);
+  $('saveFields').querySelectorAll('input, select').forEach(el => {
+    el.disabled = !emailReady;
+  });
+  fillReportTo();
+  refresh();
+}
+
+// The way back, for someone the save block sent over here.
+let cameForSave = false;
+$('goEmail').onclick = () => {
+  cameForSave = true;
+  showTab('email');
+  $('mail_address').focus();
+};
+$('backToSave').onclick = () => {
+  cameForSave = false;
+  $('backToSave').hidden = true;
+  showTab('new');
+  $('save_name').focus();
+  $('save_name').scrollIntoView({block: 'center'});
+};
 
 $('saveMail').onclick = async () => {
   const res = await window.pySaveEmail({
     address: $('mail_address').value.trim(),
     app_password: $('mail_password').value.trim(),
-    default_to: $('mail_to').value.trim(),
     provider: $('mail_provider').value,
     host: $('mail_host').value.trim(),
     port: Number($('mail_port').value) || 587,
   });
+  // A refusal that never reached the disk leaves the state alone; anything
+  // that was written reports what it left behind.
+  if (res.ready !== undefined) setEmailReady(res.ready);
   say('mailMsg', res.error || res.message, res.error ? 'bad' : 'ok');
+  // Only offered to someone who came here to unblock a save: sending them back
+  // to a tab they were already on would be nonsense.
+  $('backToSave').hidden = !(emailReady && cameForSave);
 };
 
 $('testMail').onclick = async () => {
@@ -445,6 +665,9 @@ $('testMail').onclick = async () => {
   btn.disabled = false;
   say('mailMsg', res.error || res.message, res.error ? 'bad' : 'ok');
 };
+
+fillMail(EMAIL);
+setEmailReady(EMAIL.ready);
 
 // ------------------------------------------------------------ automatic runs
 async function loadSchedState() {
@@ -503,17 +726,141 @@ $('schedOff').onclick = async () => {
   say('schedMsg', (res.messages || []).join('\n\n'), 'ok');
 };
 
+// ------------------------------------------------------------ past searches
+// What's in runs/, as one card per finished search. Fetched the first time the
+// tab is opened rather than at startup: it means reading every run's manifest,
+// and most launches never look at this tab at all.
+const RUNS = [];
+let runsLoaded = false;
+
+function runDetail(r) {
+  const bits = [];
+  const n = r.listings;
+  bits.push(n == null ? 'results on disk'
+            : `<b>${n}</b> ${n === 1 ? 'listing' : 'listings'}`);
+  if (r.new_listings != null) bits.push(`<b>${r.new_listings}</b> new that run`);
+  if (r.cities) bits.push(`${r.cities} ${r.cities === 1 ? 'city' : 'cities'}`);
+  if (r.duration_text) bits.push(`took ${r.duration_text}`);
+  if (r.earlier_runs) bits.push(`${r.earlier_runs} earlier `
+    + `${r.earlier_runs === 1 ? 'run' : 'runs'} kept`);
+  return bits.join(' &middot; ');
+}
+
+function renderRuns() {
+  const wrap = $('runList');
+  if (!RUNS.length) {
+    wrap.innerHTML = '<div class="empty">Nothing has finished yet. Every '
+      + 'search you run leaves its results here.</div>';
+    return;
+  }
+  wrap.innerHTML = RUNS.map(r => `
+    <div class="card run" data-id="${escHtml(r.id)}" role="button" tabindex="0">
+      <div class="top">
+        <span class="nm">${escHtml(r.name)}</span>
+        ${r.scheduled ? '<span class="pill">scheduled</span>' : ''}
+      </div>
+      <div class="det">
+        Ran ${escHtml(r.when_text)}<br>
+        ${runDetail(r)}
+      </div>
+      <div class="foot">
+        <span class="opens">Open the gallery &rarr;</span>
+        <div class="acts"><button class="mini" data-act="del">Delete</button></div>
+      </div>
+    </div>`).join('');
+}
+
+async function loadRuns(force) {
+  if (runsLoaded && !force) return;
+  const wrap = $('runList');
+  wrap.innerHTML = '<div class="empty">Reading the runs folder…</div>';
+  const res = await window.pyListRuns();
+  runsLoaded = true;
+  if (res.error) {
+    wrap.innerHTML = '';
+    say('runMsg', res.error, 'bad');
+    return;
+  }
+  say('runMsg', '');
+  RUNS.length = 0; RUNS.push(...(res.runs || []));
+  renderRuns();
+}
+$('refreshRuns').onclick = () => loadRuns(true);
+
+// The gallery opens in the everyday browser, not in this window: this one is
+// the settings window, and it closes as soon as a search starts.
+async function openRun(card) {
+  const r = RUNS.find(x => x.id === card.dataset.id);
+  card.classList.add('busy');
+  say('runMsg', `Opening ${r ? r.name : 'that search'}…`);
+  const res = await window.pyOpenRun(card.dataset.id);
+  card.classList.remove('busy');
+  // A gallery that opened is now in front of them, in another window, saying so
+  // itself. Only a failure is worth words, because that's the case where
+  // nothing visible happened.
+  say('runMsg', res.error || '', res.error ? 'bad' : '');
+}
+
+// Deleting is permanent, so the button asks for a second click, the same way
+// the scheduled searches list does.
+function disarmRunDeletes() {
+  $('runList').querySelectorAll('button[data-confirm]').forEach(o => {
+    delete o.dataset.confirm; o.textContent = 'Delete';
+  });
+}
+
+async function deleteRun(btn) {
+  const card = btn.closest('.card.run');
+  const r = RUNS.find(x => x.id === card.dataset.id);
+  if (!btn.dataset.confirm) {
+    disarmRunDeletes();
+    btn.dataset.confirm = '1';
+    btn.textContent = 'Really delete?';
+    return;
+  }
+  card.classList.add('busy');
+  const res = await window.pyDeleteRun(card.dataset.id);
+  if (res.error) {
+    card.classList.remove('busy');
+    say('runMsg', res.error, 'bad');
+    return;
+  }
+  RUNS.length = 0; RUNS.push(...(res.runs || []));
+  renderRuns();
+  say('runMsg', `Deleted “${r ? r.name : 'that search'}”.`, 'ok');
+}
+
+$('runList').addEventListener('click', e => {
+  // The delete button sits inside a card that is itself one big button, so it
+  // has to be looked for first or every delete would also open a gallery.
+  const btn = e.target.closest('button[data-act]');
+  if (btn) { deleteRun(btn); return; }
+  const card = e.target.closest('.card.run');
+  if (!card) return;
+  disarmRunDeletes();
+  openRun(card);
+});
+$('runList').addEventListener('keydown', e => {
+  if (e.key !== 'Enter' && e.key !== ' ') return;
+  // A button answers those keys itself, with a click this listener has already
+  // handled; the card only wants them when it's the card that's focused.
+  if (e.target.closest('button')) return;
+  const card = e.target.closest('.card.run');
+  if (card) { e.preventDefault(); disarmRunDeletes(); openRun(card); }
+});
+
 // ------------------------------------------------- the shortcut offer
-// Shown by itself only on a launch where there's no shortcut yet and nobody has
+// Shown by itself on a launch where there's no shortcut yet and nobody has
 // asked to be left alone about it; Python decides that and sends the answer in.
-// The button on the Email & schedule tab opens the same sheet on demand.
+// There's no way back to it from inside the window, on the grounds that someone
+// who doesn't want one when offered doesn't want one at all — and a launch that
+// still hasn't a shortcut asks again anyway.
 let shortcutSettled = false;   // true once Python has recorded what they chose
-let shortcutReturn = 'query';  // what had focus before the sheet took it
 
 function closeShortcut() {
   shortcutOpen = false;
   $('shortcutAsk').hidden = true;
-  $(shortcutReturn).focus();
+  $('query').focus();
 }
 
 $('shortcutSkip').onclick = async () => {
@@ -553,25 +900,11 @@ $('shortcutAsk').addEventListener('click', e => {
   if (e.target === $('shortcutAsk')) $('shortcutSkip').click();
 });
 
-function openShortcut(offer) {
-  const o = offer || SHORTCUT;
-  // A sheet that's already been through a successful add has its places, its
-  // note and two of its buttons put away, so opening one again has to undo all
-  // of that rather than show the leftovers of last time.
-  shortcutSettled = false;
-  $('shortcutMsg').hidden = true;
-  $('shortcutPlaces').hidden = false;
-  $('shortcutNever').hidden = false;
-  $('shortcutNever').setAttribute('aria-pressed', 'false');
-  $('shortcutAdd').hidden = false;
-  $('shortcutAdd').disabled = false;
-  $('shortcutAdd').textContent = 'Add shortcut';
-  $('shortcutSkip').textContent = 'Not now';
-  $('shortcutSkip').className = 'cancel';
-  $('shortcutWhy').textContent = o.why || '';
-  $('shortcutNote').textContent = o.note || '';
-  $('shortcutNote').hidden = !o.note;
-  $('shortcutPlaces').innerHTML = (o.places || []).map(p =>
+function openShortcut() {
+  $('shortcutWhy').textContent = SHORTCUT.why || '';
+  $('shortcutNote').textContent = SHORTCUT.note || '';
+  $('shortcutNote').hidden = !SHORTCUT.note;
+  $('shortcutPlaces').innerHTML = (SHORTCUT.places || []).map(p =>
     `<div class="tog" data-place="${escHtml(p.id)}" role="button" tabindex="0"
           aria-pressed="${p.on ? 'true' : 'false'}">`
     + `<span class="box">✓</span>${escHtml(p.label)}</div>`).join('');
@@ -580,25 +913,7 @@ function openShortcut(offer) {
   $('shortcutAdd').focus();
 }
 
-// The offer only puts itself in front of someone once. This is the way back to
-// it — including after "don't ask again", which is meant to stop the asking
-// rather than to rule out ever having one.
-$('shortcutOpen').onclick = async () => {
-  const btn = $('shortcutOpen');
-  btn.disabled = true;
-  const res = await window.pyReopenShortcut();
-  btn.disabled = false;
-  if (res.error) { say('shortcutOpenMsg', res.error, 'bad'); return; }
-  if (!res.ask) {
-    say('shortcutOpenMsg', "This computer hasn't anywhere to put one.", 'bad');
-    return;
-  }
-  $('shortcutOpenMsg').hidden = true;
-  shortcutReturn = 'shortcutOpen';
-  openShortcut(res);
-};
-
-if (DEFAULTS.query) $('query').value = DEFAULTS.query;
+setQueries(DEFAULTS.queries || (DEFAULTS.query ? [DEFAULTS.query] : []));
 if (DEFAULTS.exclude) $('exclude').value = DEFAULTS.exclude;
 showTab('new');
 refresh();

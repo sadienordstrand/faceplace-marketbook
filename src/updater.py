@@ -11,7 +11,7 @@ version is, tells the owner when theirs is behind, and replaces the code in
 place when they ask it to.
 
 In place is the point. Everything a person would hate to lose lives in .state/
-(the Facebook login, saved searches, the database, the email settings) and in
+(the Facebook login, scheduled searches, the database, the email settings) and in
 runs/, both of which this never touches — so updating keeps the login, the
 history, and any desktop shortcut pointing at this folder.
 
