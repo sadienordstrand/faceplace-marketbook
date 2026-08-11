@@ -127,11 +127,7 @@ def query_label(queries):
 
 
 def query_tokens(query):
-    """The words of one query, every one of which a listing has to contain.
-
-    Numbers and one- and two-letter words count as words: '110' is the whole
-    point of "defender 110", and someone who types "vw bus" means the VW part.
-    A run of letters and digits together, like '4x4', stays one word."""
+    """The words of one query, every one of which a listing has to contain."""
     return re.findall(r"[a-z0-9]+", (query or "").lower())
 
 

@@ -2078,12 +2078,7 @@ def ui_hooks():
             if beat and parse_iso(beat.get("at")):
                 hint += f" Last checked {fmt_when(parse_iso(beat['at']))}."
         else:
-            hint = ("Nothing runs on its own yet. Turning this on lets your "
-                    "computer wake itself up at the scheduled time, run the "
-                    "search, and email you the results.")
-            if os_name() == "darwin":
-                hint += (" macOS will ask for your password, because waking a "
-                         "sleeping Mac on a schedule needs administrator rights.")
+            hint = ("Turn on automatic runs to enable scheduled searches.")
         return {"installed": installed, "hint": hint,
                 "problems": schedule_problems()}
 

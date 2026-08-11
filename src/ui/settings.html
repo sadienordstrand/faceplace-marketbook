@@ -24,7 +24,7 @@ __UPDATE_BAR__
       <span class="lab">Query</span>
       <div class="queries" id="queryList">
         <div class="qrow">
-          <input type="text" id="query" class="qbox" placeholder="defender 110"
+          <input type="text" id="query" class="qbox" placeholder="your search query"
                  autofocus>
         </div>
       </div>
@@ -133,7 +133,7 @@ __UPDATE_BAR__
       </div>
     </div>
     <div class="hint"><b>Save raw payloads</b> saves the raw JSON Facebook sent
-      into the run folder's <code>debug/</code>. Useful for troubleshooting, but you can typically leave it off.</div>
+      into the run folder's <code>debug/</code>. Only useful for troubleshooting.</div>
   </section>
 
   <section id="descBlock">
@@ -155,14 +155,12 @@ __UPDATE_BAR__
       fetches descriptions and photos for listings it hasn't seen before, so
       later runs are much quicker than the first one.</div>
     <div class="blocked" id="saveNeedsEmail" hidden>
-      <p>A scheduled search has no way to reach you until this computer can send
-        mail, so setting your email up is part of making one. It takes a
-        minute.</p>
+      <p>Configure your email settings to run a scheduled search.</p>
       <p><button class="mini" id="goEmail">Set up email</button></p>
     </div>
     <div id="saveFields">
       <label class="field"><span class="lab">Name this search</span>
-        <input type="text" id="save_name" placeholder="Defender 110">
+        <input type="text" id="save_name" placeholder="1957 Chevy">
       </label>
       <label class="field"><span class="lab">Email the report to</span>
         <input type="text" id="save_email" placeholder="you@example.com">
@@ -189,9 +187,7 @@ __UPDATE_BAR__
       <div class="grp"><button class="mini" id="refreshSaved">Refresh</button></div>
     </div>
     <div class="blocked" id="savedNeedsEmail" hidden>
-      <p>Email isn't set up on this computer, so nothing here can send you a
-        report. Set it up on the <b>Email &amp; Setup</b> tab and these will
-        start arriving.</p>
+      <p>Visit the <b>Email &amp; Setup</b> tab to enable scheduled searches.</p>
     </div>
     <div class="saved" id="savedList"></div>
     <div class="note" id="savedMsg" hidden></div>

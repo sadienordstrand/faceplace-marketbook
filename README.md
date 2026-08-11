@@ -1,17 +1,14 @@
 # Faceplace Marketbook
 
 Facebook Marketplace's built-in search only covers one city at a time, and pads
-the results with loosely related junk.
+the results with unrelated listings.
 
 **This tool:**
-- Searches as many cities as you like (the default is twelve cities that between
-  them cover the continental US)
-- Throws out the things that don't match, so you don't have to sift through
-  endless junk
+- Searches as many cities as you like (the default is twelve cities with search radiuses that cover the entire continental US)
+- Throws out the listings that don't match, so you don't have to sift through all the junk
 - Collects each listing's photo and description, and builds a catalogue you can
   search, sort, and prune
-- If desired, will automatically run scheduled searches and email you what's new
-  — and what sold — since last time.
+- If desired, will automatically run scheduled searches and email you what's new since last time.
 
 Works on Windows and Mac.
 
@@ -60,30 +57,34 @@ you acknowledge and accept this risk.
   app. Only the resulting browser session is saved on your computer, in a hidden
   folder called `.state`, so you don't have to log in every time.
 - **Facebook changes their website constantly.** When they do, searches may
-  start coming back empty or with missing prices. That's expected wear, not
-  something you broke.
+  start coming back empty or with missing prices. Please contact me if this happens so I can update the app accordingly. 
 
 ---
 
 ## Overview
 
-Every run builds a gallery like this, saved on your own computer. You can search
-it, sort by price or year, filter by city, and throw out anything you don't want
+Every search builds a gallery like this, saved on your computer. You can search
+it, sort by price or year, filter by city, and hide anything you don't want
 to see again.
 
 ![The gallery a run produces](docs/images/gallery.jpg)
 
+---
+
 This is the search setup window.
 
 ![The search setup window](docs/images/settings-search.png)
+
+---
 
 Scheduled searches run at an interval you choose, and can be paused, edited or
 run on the spot.
 
 ![The scheduled searches tab](docs/images/settings-saved.png)
 
-When a scheduled search finishes, it emails you a summary of what's new and what
-has sold or been taken down since last time.
+---
+
+When a scheduled search finishes, it emails you a summary.
 
 ![An emailed report](docs/images/email-report.png)
 
@@ -121,14 +122,12 @@ downloaded from outside the Microsoft Store.
 <details>
 <summary><strong>If your Mac won't open it — "Apple could not verify ..."</strong></summary>
 
-The button you need is in Settings:
-
-1. Open **System Settings** → **Privacy & Security**.
-2. Scroll down to the **Security** section. You'll see a line saying
+1. Click Done to dismiss the popup warning.
+2. Open **System Settings** → **Privacy & Security**.
+3. Scroll down to the **Security** section. You'll see a line saying
    `"Start Faceplace Marketbook (Mac).command" was blocked to protect your Mac`,
-   with an **Open Anyway** button next to it. Click it.
-3. Confirm with your password or Touch ID, and click **Open Anyway** again if
-   asked.
+   Click **Open Anyway**.
+4. Click **Open Anyway** again if asked, and confirm with your password or Touch ID.
 
 **Or run it from Terminal,** which always works and skips Apple's permission
 entirely:
@@ -161,13 +160,11 @@ Nothing is changed anywhere else on your computer.
 <details>
 <summary><strong>Installing Python, if it asks you to</strong></summary>
 
-You need **version 3.9 or newer**. If you're installing fresh, just take the
-latest.
+You need **version 3.9 or newer**.
 
 **On Windows:** go to <https://www.python.org/downloads/windows/> and download
 the latest "Windows installer (64-bit)". Run it. On the very first screen,
 **tick the box that says "Add python.exe to PATH"** before clicking Install Now.
-That box matters — without it the app can't find Python.
 
 **On Mac:** go to <https://www.python.org/downloads/macos/> and download the
 latest "macOS 64-bit universal2 installer". Open it and click through.
@@ -178,41 +175,9 @@ and some confusion about which is in charge.
 
 </details>
 
-### Step 3 — Log into Facebook
+### Step 3 — Add a shortcut on your computer, if you like
 
-The first run opens a Facebook window and waits. Log in as you normally would,
-including any two-factor code or captcha. The app notices when you're through
-and carries on by itself.
-
-It remembers the session, so you shouldn't have to do this again for a long
-while — usually a few weeks, until Facebook expires it.
-
-**When it does expire:**
-- Double-click the **Log into Facebook** file (`Log into Facebook (Mac).command`
-  or `Log into Facebook (Windows).bat`). A Facebook window opens, you log in,
-  and it saves the session and closes.
-- Or just start a search as usual. If the login has expired, you'll be asked for
-  it before the sweep begins.
-
-### Step 4 — Set your search radius
-
-Once you're logged in, the app loads Marketplace and then **stops and waits for
-you** before searching anything.
-
-In the browser window, click the location button in the left sidebar and set the
-radius you want to search around each city. Facebook starts new accounts at 250
-miles and allows up to 500. **500 miles** is the setting the twelve built-in
-cities are spaced for, so choose that if you want them to cover the whole
-country; a shorter radius is fine if you only care about listings near the
-cities you picked.
-
-While you're in there, dismiss any Facebook notification popups. Then come back
-to the terminal and press **Enter**.
-
-### Step 5 — Add a shortcut on your computer, if you like
-
-The Search Setup window offers this the first time it opens, with a small panel
-headed **Add a shortcut?** Tick where you want it and click **Add shortcut**:
+The Search Setup window offers this the first time it opens. Select where you want it and click **Add shortcut**:
 
 - **Desktop** — an icon called **Faceplace Marketbook** that you double-click to
   start a search, exactly as the Start file does.
@@ -230,105 +195,39 @@ the folder used to be; the [Troubleshooting](#troubleshooting) section explains 
 
 ## Running a search
 
-After the login, a **Search Setup** window opens.
+Once the app opens, try running a search.
 
-Fill in the New search tab and click **Start Search**. Each setting has a short
-explanation underneath it in the window itself; this is just a brief overview:
-
-- **Query** — what you're looking for, e.g. `land rover defender 110`. More
-  words narrows the results.
-- **Cities** — each selected city searches out to your account's radius around
-  itself, up to 500 miles. Select all of them, at 500 miles, to cover the
-  continental US. You can add your own cities too; see below.
-- **Price range**, **Year range**, and **Exclude terms** — the most effective
-  ways to cut junk. See below.
-- **Stages** — whether to collect descriptions and download photos. Both on is
-  the normal choice; turning one off makes the search quicker. The gallery is
-  always built.
-- **Description retrieval** — an optional cap on how many listings get a
-  description, and the pace.
-
-
-### Getting better results
-
-Facebook search is a suggestion, not a filter. It pads results heavily: in one
-measured search, **85% of what came back didn't have the search term in the
-title at all.** Two settings help clean that up:
-
-**Exclude terms**: If you're looking for a certain car, you might put "hot
-wheels" and "lego" in the excluded terms to avoid cluttering your search results
-with toys that share the name of that car. Capitalization and punctuation are
-ignored, so `can am` also catches "Can-Am" and "CAN AM", but not "canam". Terms 
-match at the start of a word, so `fender` catches "fender flares" but not "Defender".
-
-**A minimum/maximum price** can also narrow the results considerably, and 
-**minimum/maximum year** narrows it to the model years you're looking for.
-
-**Leave "Exact matching" off.** It has a tendency to exclude some legitimate
-results, and doesn't provide much benefit besides making your search a bit
-faster.
-
-### Adding your own cities
-
-The twelve cities that come with it are spaced so their 500-mile circles cover
-the continental US, so for a nationwide search you don't need to add anything.
-But if you want to add your own city to search, you can do that.
-
-Facebook identifies a Marketplace city by a string buried in its web address. To
-get it:
-
-1. Open [facebook.com/marketplace](https://www.facebook.com/marketplace) in your browser.
-2. Click the location, type the city you want, pick it from the dropdown, and
-   click Apply.
-3. Copy the whole web address from the address bar.
-
-Paste that into the box at the bottom of the **Cities** section, give it a name
-(like "City, ST") and click **Add city**. Cities you add are saved and will be
-there next time. To get rid of one, hover over it and click the **✕**.
-
-**If the address you paste isn't valid, you won't find out until a run.**
-Invalid cities will be skipped, and if it's a scheduled search, the email report
-will have a warning at the top. Remove the bad entry and add it again with the
-correct link.
-
----
+1. Fill out the search setup page. Each setting has a short explanation underneath it to help guide you. Don't worry about creating a Scheduled Search right now — that will be covered later.
+2. Click **Start Search**. Facebook will automatically open in a new window.
+3. Log into Facebook as you normally would, including any two-factor code or captcha. The app will automatically take you to Marketplace.
+4. Dismiss any popups from Facebook. Then, click the location button in the left sidebar and set the radius you want to search around each city. The twelve built-in cities are spaced so that a 500-mile radius will cover the entire continental US; a smaller radius is fine if you only care about listings near the cities you picked.
+5. Return to the terminal window and press Enter to start the search.
 
 ## While it runs
 
-The terminal window narrates as it goes: which city it's on, how many listings
-it's found, and how many survived filtering. It's meant to be readable — if it
-looks stuck, check the last line.
+**The terminal window narrates as it goes:** which city it's on, how many listings
+it's found, and how many survived filtering.
 
 **Don't touch the browser window it opens.** The app is driving that window.
-Clicking, scrolling, typing, or opening a listing in it will fight the app for
-control, and at worst it loses the city it was working on. You can use your
+Clicking, scrolling, or typing will fight the app for
+control, and could cause it to lose its place. You can use your
 computer normally otherwise, including your own separate browser — just leave
-that one window be.
+that one window alone.
 
-Collecting descriptions is the slow part, roughly 7 seconds per listing, because
-each one is a separate page visit and the app deliberately pauses between them
-to avoid getting flagged for suspicious bot activity. A few thousand listings
-might be an overnight job. The estimate is printed before that stage starts.
+**Keep your computer turned on.** The app tries to keep your computer awake while it
+works, and it will continue running even if the display turns off to save power. However, closing your laptop lid will put it to sleep, unless there are external displays connected. Keep your computer plugged in with the lid open so that the search doesn't get interrupted.
 
-**Sleep is handled for you.** A long run would normally be cut short by the
-computer going to sleep, so the app asks your system to stay awake while it
-works, and releases that as soon as it's done. One thing it can't override:
-**closing a laptop lid still puts the machine to sleep, unless there are
-external displays connected.** For an overnight run, leave the lid open and
-leave it plugged in.
-
-**You can stop it early.** Press `Control-C` in the terminal and it ends the search,
-building the gallery with everything it gathered so far.
+**You can stop it early.** Press `Control-C` in the terminal to end the search at any time, and it will build the gallery with everything it gathered so far.
 
 ---
 
 ## Your results
 
-When it finishes, your gallery opens in your browser automatically.
+When it finishes, the results gallery will open automatically.
 
 Everything from the run lands in a new folder inside `runs/`, named for your
-search and the date, like `runs/my_search_08-05-2026/`. Run the same search
-twice in a day and the second becomes `..._1`. In each folder:
+search and the date, like `runs/my_search_08-05-2026/`. If you manually run the same search
+twice in a day, the second becomes `..._1`. In each folder:
 
 - **`gallery.html`** — the browsable catalogue. The photos are baked into this
   one file, so you can move it anywhere and it still works.
@@ -340,22 +239,16 @@ twice in a day and the second becomes `..._1`. In each folder:
 - **`run.json`** — a record of what was searched and what came back.
 - **`thumbnails/`** — the photos as individual files.
 
-In the gallery you can search the text, filter by which city found it, and click
-any card for the full description. The **✕** in a card's corner hides listings
+In the gallery you can search the text, filter by which city found it, and sort by price, year, or title (A-Z). You can also click
+any card to see the full description, or click **View On Facebook** to open the listing in your browser. Hover over a card and click the **✕** in the corner to hide listings
 you're not interested in; the app remembers what you've hidden even after you
 close and reopen the page.
-
-The sort menu offers price, title, and year. If you sort by year, anything
-without a year in its title will be at the bottom.
 
 ---
 
 ## Automated searches
 
-You can save a search under a name and have the app run it on its own — every
-day, every few hours, whatever you pick — and email you what turned up. It only
-looks up descriptions and photos for listings it has never seen before, so after
-the first run these are much quicker.
+You can save a search and have the app run it automatically on a fixed interval, to find new listings, or listings that didn't turn up on the first pass. Each time it runs, it will email you a report of what it found.
 
 Each report tells you what's new, what's still there, and what sold or was taken
 down since last time.
