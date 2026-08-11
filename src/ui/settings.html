@@ -109,9 +109,15 @@ __UPDATE_BAR__
     <div class="note bad" id="filterMsg" style="margin-bottom: 16px" hidden></div>
     <label class="field"><span class="lab">Exclude terms</span>
       <input type="text" id="exclude" placeholder="rhd, can am, hot wheels">
-      <div class="hint">Comma separated. Capitalization and punctuation are
-        ignored, so "can am" also filters out "Can-Am" and "CAN AM".
-        Terms match at the start of a word, so "fender" filters out "fenders" but not "defender".</div>
+      <div class="hint">Enter a list of terms to filter out unwanted items,
+        separated by commas.
+        <ul>
+          <li>Capitalization and punctuation are ignored, so "can am" also
+            filters out "Can-Am" and "CAN AM".</li>
+          <li>Terms match at the start of a word, so "fender" filters out
+            "fenders" but not "defender".</li>
+        </ul>
+      </div>
     </label>
   </section>
 
@@ -273,6 +279,17 @@ __UPDATE_BAR__
         </ol>
       </div>
     </details>
+  </section>
+
+  <section id="shortcutBlock" hidden>
+    <h2>Shortcut</h2>
+    <div class="hint" style="margin: 0 0 14px">An icon somewhere you can reach
+      it, so starting a search doesn't mean finding this folder first. Adding one
+      again replaces what's already there, which is also how you point an icon
+      back at the app after moving the folder.</div>
+    <div class="acts" style="display:flex; gap:9px">
+      <button class="mini" id="shortcutOpen">Create a shortcut</button>
+    </div>
   </section>
 </div>
 </main>

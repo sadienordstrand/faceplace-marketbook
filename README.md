@@ -1,7 +1,7 @@
 # Faceplace Marketbook
 
 Facebook Marketplace's built-in search only covers one city at a time, and pads
-the results with unrelated listings.
+the results with unrelated listings. And if you want to be the first to find something, you have to manually check Facebook multiple times a day.
 
 **This tool:**
 - Searches as many cities as you like (the default is twelve cities with search radiuses that cover the entire continental US)
@@ -19,22 +19,18 @@ Works on Windows and Mac.
 - [**Setting it up**](#setting-it-up)
   - [Step 1 — Get the folder onto your computer](#step-1--get-the-folder-onto-your-computer)
   - [Step 2 — Start it](#step-2--start-it)
-  - [Step 3 — Log into Facebook](#step-3--log-into-facebook)
-  - [Step 4 — Set your search radius](#step-4--set-your-search-radius)
-  - [Step 5 — Add a shortcut on your computer, if you like](#step-5--add-a-shortcut-on-your-computer-if-you-like)
+  - [Step 3 — Add a shortcut on your computer, if you like](#step-3--add-a-shortcut-on-your-computer-if-you-like)
 - [**Running a search**](#running-a-search)
-  - [Getting better results](#getting-better-results)
-  - [Adding your own cities](#adding-your-own-cities)
 - [**While it runs**](#while-it-runs)
 - [**Your results**](#your-results)
 - [**Automated searches**](#automated-searches)
   - [On a Mac, check where this folder lives first](#on-a-mac-check-where-this-folder-lives-first)
+  - [Before you start](#before-you-start)
   - [Part 1 — Give the app an email password](#part-1--give-the-app-an-email-password)
   - [Part 2 — Save a search](#part-2--save-a-search)
   - [Part 3 — Let your computer wake itself up](#part-3--let-your-computer-wake-itself-up)
   - [What the emails look like](#what-the-emails-look-like)
   - [Where scheduled results live](#where-scheduled-results-live)
-  - [Turning it off](#turning-it-off)
 - [**Keeping it up to date**](#keeping-it-up-to-date)
 - [**Troubleshooting**](#troubleshooting)
 - [**For the technically inclined**](#for-the-technically-inclined)
@@ -188,8 +184,7 @@ The Search Setup window offers this the first time it opens. Select where you wa
 A shortcut is the only thing any of this puts outside the app's folder. Deleting
 the shortcut will not delete the app itself.
 
-If you move the app's folder later, the shortcut will still be pointing at where
-the folder used to be; the [Troubleshooting](#troubleshooting) section explains how to fix it.
+Visit the Email & Setup tab to create a shortcut later, or to replace a shortcut that stopped working when you move the app's folder.
 
 ---
 
@@ -217,7 +212,7 @@ that one window alone.
 **Keep your computer turned on.** The app tries to keep your computer awake while it
 works, and it will continue running even if the display turns off to save power. However, closing your laptop lid will put it to sleep, unless there are external displays connected. Keep your computer plugged in with the lid open so that the search doesn't get interrupted.
 
-**You can stop it early.** Press `Control-C` in the terminal to end the search at any time, and it will build the gallery with everything it gathered so far.
+**You can stop it early.** Press `Control-C` in the terminal to end the search at any time, and it will build the gallery with everything it gathered so far. Closing the automated browser window does the same thing, but `Control-C` allows it to wrap up more cleanly.
 
 ---
 
@@ -445,6 +440,17 @@ You don't need to re-download the code when the app changes. Every time you
 start it, it checks whether there's a newer version, and prompts you to
 update if needed.
 
+The check reports itself in the Terminal window, so you can always see what it
+found:
+
+```
+Checking for updates... up to date. This is version 1.3.1.
+```
+
+If there's a new version, that line says so and the app's window offers a button
+to install it. If your internet is down, the line says the check couldn't be made
+rather than quietly implying you're up to date.
+
 ---
 
 ## Troubleshooting
@@ -489,11 +495,10 @@ on a very long run. Running the search again picks them up.
    cause. Click **Send a test email**.
 
 **My desktop icon says it can't find the folder, or does nothing.** It holds the
-folder's location, so moving or renaming the folder breaks it. Throw the old
-icon away, then start the app from the folder's new home — with no shortcut left
-anywhere, it offers you a fresh one on that launch. If you'd previously ticked
-**Don't ask again**, it won't offer, and the way to ask outright is to run the
-Start file from a terminal with `--desktop-icon` on the end.
+folder's location, so moving or renaming the folder breaks it. Start the app from
+the folder's new home, go to the *Email & Setup* tab, and click **Create a
+shortcut** — that writes a fresh icon over the old one. Throw away any copies
+left in places you no longer want it.
 
 **It said macOS wouldn't keep the Dock entry.** That happens occasionally; the
 Dock is particular about being edited underneath it. The app itself is in your

@@ -49,15 +49,22 @@ class Redirected(unittest.TestCase):
 
 
 class Offer(Redirected):
-    """When the settings window should raise the subject."""
+    """When the settings window should raise the subject, and what it offers."""
 
     def test_a_fresh_mac_is_offered_the_desktop_and_the_dock(self):
         self.on("Darwin")
         offer = mk.offer()
         self.assertTrue(offer["ask"])
         self.assertEqual([p["id"] for p in offer["places"]], ["desktop", "dock"])
-        # Only the first is ticked; the Dock is more of an imposition.
-        self.assertEqual([p["on"] for p in offer["places"]], [True, False])
+
+    def test_every_place_is_ticked_so_one_click_makes_the_lot(self):
+        # Someone who wants the app quicker to reach generally wants it in both
+        # places, and unticking one is easier than noticing the second was
+        # offered at all.
+        self.on("Darwin")
+        self.assertEqual([p["on"] for p in mk.offer()["places"]], [True, True])
+        self.on("Windows")
+        self.assertEqual([p["on"] for p in mk.offer()["places"]], [True, True])
 
     def test_a_fresh_windows_machine_is_offered_the_start_menu(self):
         self.on("Windows")
@@ -69,30 +76,30 @@ class Offer(Redirected):
 
     def test_nothing_is_offered_where_no_shortcut_can_be_made(self):
         self.on("Linux")
-        self.assertEqual(mk.offer(), {"ask": False})
+        self.assertEqual(mk.offer(), {"ask": False, "places": []})
 
-    def test_having_one_already_is_the_end_of_the_matter(self):
+    def test_having_one_already_is_the_end_of_the_asking(self):
         self.on("Darwin", taken=["desktop"])
-        self.assertEqual(mk.offer(), {"ask": False})
+        self.assertFalse(mk.offer()["ask"])
 
     def test_a_dock_icon_alone_also_counts_as_having_one(self):
         self.on("Darwin", taken=["dock"])
-        self.assertEqual(mk.offer(), {"ask": False})
+        self.assertFalse(mk.offer()["ask"])
 
-    def test_dont_ask_again_is_the_end_of_it_too(self):
+    def test_dont_ask_again_is_the_end_of_the_asking_too(self):
         self.on("Darwin")
         self.assertTrue(mk.offer()["ask"])
         mk.stop_asking()
-        self.assertEqual(mk.offer(), {"ask": False})
+        self.assertFalse(mk.offer()["ask"])
 
-    def test_dont_ask_again_stays_the_end_of_it(self):
-        # The window used to carry a button that reopened the sheet anyway.
-        # There isn't one any more: turning the offer down is meant to be the
-        # last of it, and --desktop-icon is the way back for anyone who changes
-        # their mind.
-        self.on("Darwin")
+    def test_the_places_come_back_even_when_the_question_is_not_asked(self):
+        # The Email & Setup tab has a button that opens the same panel, so the
+        # window needs the list whether or not it's being put in front of anyone.
+        self.on("Darwin", taken=["desktop"])
         mk.stop_asking()
-        self.assertEqual(mk.offer(), {"ask": False})
+        offer = mk.offer()
+        self.assertFalse(offer["ask"])
+        self.assertEqual([p["id"] for p in offer["places"]], ["desktop", "dock"])
 
     def test_the_record_survives_being_written_twice(self):
         mk.save_state(added={"desktop": "/somewhere"})

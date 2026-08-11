@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Offline tests for the sweep, and for what Ctrl-C does to one.
+Offline tests for the sweep, and for what stopping one does to it.
 
     python3 -m unittest tests.test_sweep
 
@@ -9,13 +9,18 @@ way of failing: whatever has been found is kept, and the outputs are written
 from it. That promise is the whole subject here, and it only means anything if
 it holds at every stage, so each stage gets its own interrupt.
 
+There are two ways to stop a run — Ctrl-C in the terminal and closing the browser
+window — and they are meant to be the same ending, so both are tested against the
+same promise.
+
 No browser is opened. Playwright, the login, the page and the two stages that
 download things are all stubs, which is also what lets a test say exactly where
-the Ctrl-C lands.
+the interruption lands.
 """
 import csv
 import io
 import json
+import re
 import sys
 import unittest
 from contextlib import redirect_stdout
@@ -24,9 +29,14 @@ from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
+import browser
 import fb_marketplace_sweep as fb
 import locations
 import storage
+
+# Playwright's wording when the window has gone, which is all the app has to go
+# on: the exception class it arrives as depends on which call was in flight.
+GONE = ("Page.mouse.wheel: Target page, context or browser has been closed")
 
 CITIES = {"Medford, OR": "medford", "Sacramento, CA": "sacramento",
           "Denver, CO": "denver"}
@@ -70,16 +80,20 @@ class FakeMouse:
 
 class ScrollPage:
     """Enough of a page for the scroll loop: every turn of the wheel brings a
-    fresh batch of cards, and the test says which turn Ctrl-C lands on."""
+    fresh batch of cards, and the test says which turn the run is stopped on and
+    whether it's stopped by Ctrl-C or by the window being closed."""
 
-    def __init__(self, per_scroll=2, stop_on=None):
+    def __init__(self, per_scroll=2, stop_on=None, closed_on=None):
         self.per_scroll, self.stop_on, self.scrolls = per_scroll, stop_on, 0
+        self.closed_on = closed_on
         self.mouse = FakeMouse(self)
 
     def turn(self):
         self.scrolls += 1
         if self.scrolls == self.stop_on:
             raise KeyboardInterrupt
+        if self.scrolls == self.closed_on:
+            raise RuntimeError(GONE)
 
     def evaluate(self, js):
         return [card(str(i))
@@ -106,6 +120,33 @@ class TestScrolling(Patched):
         self.assertEqual(stats["stop_reason"], fb.STOPPED_BY_HAND)
         self.assertEqual(stats["scrolls_used"], 3)
         self.assertIn("Keeping the 6 cards", self.said)
+
+    def test_closing_the_window_keeps_them_the_same_way_ctrl_c_does(self):
+        cards, _, _, stats = self.quietly(
+            fb.collect_city, ScrollPage(closed_on=3), 20, None)
+        self.assertEqual(len(cards), 6)
+        self.assertEqual(stats["stop_reason"], fb.STOPPED_BY_HAND)
+        self.assertIn("The Facebook window was closed", self.said)
+        self.assertIn("Keeping the 6 cards", self.said)
+
+    def test_the_on_page_notice_cannot_pass_for_facebooks_divider(self):
+        # CARDS_JS finds the out-of-radius divider by looking for a short element
+        # whose text says the results came from elsewhere. The note the app draws
+        # over every page is a short element that mentions searching, and a false
+        # divider is expensive: every card after it gets dropped.
+        pattern = re.search(r"const rx = /(.+)/i;", fb.CARDS_JS).group(1)
+        self.assertIsNone(re.search(pattern, browser.NOTICE_TEXT, re.I))
+        # And the real thing still matches, so the check above means something.
+        self.assertTrue(re.search(pattern, "Results from outside your search",
+                                  re.I))
+
+    def test_an_error_that_is_not_a_closed_window_is_still_an_error(self):
+        # Only a window that has gone gets turned into an ending. Anything else
+        # is a bug, and swallowing it would hide it behind a short run.
+        page = ScrollPage()
+        page.turn = lambda: (_ for _ in ()).throw(RuntimeError("something else"))
+        with self.assertRaises(RuntimeError):
+            self.quietly(fb.collect_city, page, 20, None)
 
 
 # ------------------------------------------------------- the whole run, stopped
@@ -134,9 +175,9 @@ class Page:
         return []
 
 
-class TestStoppingARun(Patched):
-    """`run()` with the browser replaced. Each test stops the run somewhere
-    different and then asks the same question: is the work still there?"""
+class SweepHarness(Patched):
+    """`run()` with the browser, the login and the two downloading stages all
+    replaced, so a test can say exactly where a run is interrupted."""
 
     def setUp(self):
         self.tmp = TemporaryDirectory()
@@ -199,6 +240,11 @@ class TestStoppingARun(Patched):
     def manifest(self, summary):
         return json.loads(
             (Path(summary["run_dir"]) / "run.json").read_text(encoding="utf-8"))
+
+
+class TestStoppingARun(SweepHarness):
+    """Each test stops the run somewhere different and then asks the same
+    question: is the work still there?"""
 
     # -- stopped during the sweep -------------------------------------------
     def test_a_sweep_stopped_at_the_second_city_keeps_the_first(self):
@@ -285,6 +331,207 @@ class TestStoppingARun(Patched):
         self.assertEqual(summary["status"], "error")
         self.assertIn("Stopped", summary["error"])
         self.assertEqual(list((self.root / "runs").glob("*")), [])
+
+
+class TestClosingTheBrowserWindow(SweepHarness):
+    """Closing the window is the other way to stop a run, and it has to end the
+    same way — not least because the alternative was a process wedged inside
+    Playwright, still holding the run lock, which left the next launch unable to
+    start at all."""
+
+    def gone(self, *a, **kw):
+        raise browser.WindowClosed("The Facebook window was closed.")
+
+    def test_a_window_closed_mid_sweep_keeps_the_cities_already_done(self):
+        cities = iter(range(3))
+
+        def navigate(page, url):
+            if next(cities) >= 1:
+                self.gone()
+            return True
+        self.patch(fb, "goto_with_retry", navigate)
+
+        summary = self.sweep()
+        self.assertEqual(summary["status"], "ok")
+        self.assertEqual(self.ids_in_csv(summary), ["10", "11"])
+        self.assertTrue(Path(summary["gallery"]).exists())
+        self.assertTrue(summary["interrupted"])
+        self.assertEqual(summary["interrupted_during"], "sweep")
+
+    def test_the_browser_is_not_closed_again_on_the_way_out(self):
+        # Closing a context out of a Playwright call that already failed is what
+        # used to hang the run one step short of writing anything.
+        self.patch(fb, "goto_with_retry", self.gone)
+        self.sweep()
+        self.assertFalse(self.ctx.closed)
+
+    def test_a_window_closed_before_the_sweep_says_which_it_was(self):
+        self.patch(fb, "ensure_logged_in", self.gone)
+        with self.assertRaises(SystemExit) as caught:
+            self.sweep()
+        self.assertIn("The Facebook window was closed", str(caught.exception))
+        self.assertEqual(list((self.root / "runs").glob("*")), [])
+
+
+class TestNamingTheRunFolder(SweepHarness):
+    def folder(self, queries):
+        return Path(self.quietly(
+            fb.run, queries, 5, False, open_gallery=False, no_pause=True,
+            only_labels=["Medford, OR"])["run_dir"]).name
+
+    def test_one_query_names_the_folder(self):
+        self.assertTrue(self.folder("defender 110").startswith("defender_110_"))
+
+    def test_several_queries_are_named_for_the_first_alone(self):
+        # All of them strung together makes a name too long for the systems that
+        # have to hold it. The whole search is in run.json either way.
+        name = self.folder(["defender 110", "land rover 90", "series iii"])
+        self.assertTrue(name.startswith("defender_110_"), name)
+        self.assertNotIn("land_rover", name)
+        self.assertNotIn("series", name)
+
+    def test_the_whole_search_is_still_written_down(self):
+        summary = self.quietly(fb.run, ["defender 110", "land rover 90"], 5,
+                               False, open_gallery=False, no_pause=True,
+                               only_labels=["Medford, OR"])
+        self.assertEqual(self.manifest(summary)["query"],
+                         "defender 110 OR land rover 90")
+
+
+class Args:
+    """The command-line namespace run_from_ui reads its seed values from."""
+    query = None
+    exclude = ""
+    pace = "fast"
+    out = None
+    keep_all = False
+    match = None
+    thumbs_dir = "thumbnails"
+    no_open = False
+    no_pause = True
+
+
+class FakePage:
+    def wait_for_timeout(self, ms):
+        pass
+
+
+class FakeWindow:
+    """Stands in for the settings window. Each item in `answers` is what one
+    opening of it submits; running out of them is the window being closed."""
+
+    def __init__(self, test, answers):
+        self.test, self.answers, self.seeds = test, list(answers), []
+
+    def __call__(self, cities, paces, defaults, **kw):
+        self.seeds.append(dict(defaults))
+        self.test.events.append("window")
+        if kw.get("on_ready"):
+            kw["on_ready"](FakePage())
+        return self.answers.pop(0) if self.answers else None
+
+
+def search(**over):
+    asked = {"action": "sweep", "queries": ["defender 110"],
+             "cities": ["Medford, OR"], "exact": False, "min_price": None,
+             "max_price": None, "min_year": None, "max_year": None,
+             "include_no_year": True, "exclude": "", "do_descriptions": True,
+             "do_thumbs": True, "debug_dump": False, "pace": "fast",
+             "limit": None}
+    return {**asked, **over}
+
+
+class TestTheAppWindow(Patched):
+    """run_from_ui, which is the app as far as anyone using it is concerned: the
+    settings window, the searches started from it, and what it does between
+    them."""
+
+    def setUp(self):
+        import past_runs
+        import scheduling
+        import settings_ui
+        self.settings_ui, self.scheduling = settings_ui, scheduling
+        self.events, self.ran = [], []
+        self.patch(locations, "load_locations", lambda: dict(CITIES))
+        self.patch(locations, "base_locations", lambda: dict(CITIES))
+        self.patch(scheduling, "run_lock", lambda what: _Nothing())
+        self.patch(scheduling, "ui_hooks", dict)
+        self.patch(past_runs, "ui_hooks", dict)
+        self.patch(fb.updater, "ui_hooks", dict)
+        self.patch(fb, "show_gallery", lambda path: self.events.append("gallery"))
+
+        def sweep(*a, **kw):
+            self.events.append("search")
+            self.ran.append(kw)
+            return {"status": "ok", "gallery": "/nowhere/gallery.html"}
+        self.patch(fb, "run", sweep)
+
+    def open_window(self, *answers):
+        window = FakeWindow(self, answers)
+        self.patch(self.settings_ui, "collect_settings", window)
+        return window
+
+    def test_closing_the_window_is_how_the_app_is_quit(self):
+        # Nothing is running and nothing is half-finished, so there is nothing to
+        # keep the process — or the terminal window behind it — open for.
+        self.open_window()
+        with self.assertRaises(SystemExit) as caught:
+            self.quietly(fb.run_from_ui, Args())
+        self.assertEqual(caught.exception.code, fb.CLOSED_EXIT)
+
+    def test_a_finished_search_comes_back_to_the_window(self):
+        window = self.open_window(search())
+        with self.assertRaises(SystemExit):
+            self.quietly(fb.run_from_ui, Args())
+        self.assertEqual(len(window.seeds), 2)
+
+    def test_the_results_open_on_top_of_the_window_not_before_it(self):
+        # The listings are what you want to be looking at, and the app ready for
+        # the next search is what you want underneath them.
+        self.open_window(search())
+        with self.assertRaises(SystemExit):
+            self.quietly(fb.run_from_ui, Args())
+        self.assertEqual(self.events, ["window", "search", "window", "gallery"])
+        # Which means the run itself must not open it on the way past.
+        self.assertFalse(self.ran[0]["open_gallery"])
+
+    def test_the_form_comes_back_holding_the_last_search(self):
+        self.open_window(search(queries=["series iii"], exclude="rhd, parts"))
+        window = self.settings_ui.collect_settings
+        with self.assertRaises(SystemExit):
+            self.quietly(fb.run_from_ui, Args())
+        self.assertEqual(window.seeds[1]["queries"], ["series iii"])
+        self.assertEqual(window.seeds[1]["exclude"], "rhd, parts")
+
+    def test_nothing_is_opened_when_the_search_found_nothing(self):
+        self.patch(fb, "run", lambda *a, **kw: {"status": "ok", "gallery": None})
+        self.open_window(search())
+        with self.assertRaises(SystemExit):
+            self.quietly(fb.run_from_ui, Args())
+        self.assertNotIn("gallery", self.events)
+
+    def test_run_now_on_a_scheduled_search_comes_back_to_the_window_too(self):
+        forced = []
+        self.patch(self.scheduling, "tick",
+                   lambda force=None: forced.append(force))
+        window = self.open_window({"action": "run_saved", "id": "nightly"})
+        with self.assertRaises(SystemExit):
+            self.quietly(fb.run_from_ui, Args())
+        self.assertEqual(forced, ["nightly"])
+        self.assertEqual(len(window.seeds), 2)
+        # Those results go out by email, so there's no gallery to put up.
+        self.assertNotIn("gallery", self.events)
+
+    def test_a_window_that_will_not_open_still_says_where_the_results_went(self):
+        def broken(cities, paces, defaults, **kw):
+            self.events.append("window")
+            if len(self.events) > 1:
+                raise RuntimeError("Chromium wouldn't start")
+            return search()
+        self.patch(self.settings_ui, "collect_settings", broken)
+        with self.assertRaises(RuntimeError):
+            self.quietly(fb.run_from_ui, Args())
+        self.assertEqual(self.events, ["window", "search", "window", "gallery"])
 
 
 class _Nothing:

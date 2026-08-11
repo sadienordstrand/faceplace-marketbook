@@ -12,7 +12,7 @@ import json
 import time
 
 import paths
-from browser import goto_with_retry, human_pause
+from browser import goto_with_retry, human_pause, stop_if_window_closed
 from listings import SCRIPT_JSON_JS, find_key, iter_json_docs
 
 DEBUG_DIR = paths.DEBUG_DIR
@@ -182,6 +182,10 @@ def retrieve_descriptions(ctx, page, targets, thumbs_path=None, debug_dump=False
                     note += ", photo saved"
                 print(f"     {note} ({time.time() - t0:.1f}s)")
             except Exception as e:
+                # One listing failing is ordinary and the loop carries on. A
+                # closed window means every one of the thousands left will fail
+                # the same way, so it ends the stage instead.
+                stop_if_window_closed(e)
                 print(f"     failed: {e}")
             if on_row:
                 on_row(r)
@@ -227,7 +231,11 @@ def save_image(ctx, url, item_id, outdir):
         fp = outdir / f"{item_id}{ext}"
         fp.write_bytes(resp.body())
         return f"{outdir.name}/{fp.name}"
-    except Exception:
+    except Exception as e:
+        # A photo that won't download costs one thumbnail. A closed browser costs
+        # all of them, so it stops the stage rather than failing silently a few
+        # thousand times over.
+        stop_if_window_closed(e)
         return ""
 
 

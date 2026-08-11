@@ -35,7 +35,7 @@ LONG_ID = "loc-108173265878171108173265878171"
 PACES = {"fast": (1.0, 2.5), "slow": (3.0, 5.0)}
 OFFER = {"ask": True, "why": "Want something quicker to reach?",
          "places": [{"id": "desktop", "label": "Desktop", "on": True},
-                    {"id": "dock", "label": "Dock", "on": False}],
+                    {"id": "dock", "label": "Dock", "on": True}],
          "note": "The Dock will blink as it restarts."}
 # Scheduled searches report by email, so the window won't make one without this.
 ACCOUNT = {"provider": "gmail", "address": "me@gmail.com",
@@ -1319,7 +1319,7 @@ class UITest(unittest.TestCase):
             self.assertEqual(len(calls), 2)
         self.drive(script, extra_hooks=hooks)
 
-    # ------------------------------------------------ the shortcut offer
+    # ------------------------------------------------ the shortcut panel
     def shortcut_hooks(self, offer=None, result=None):
         """Stands in for make_desktop_icon, which would otherwise put a real
         icon on the desktop of whoever ran the tests."""
@@ -1336,18 +1336,52 @@ class UITest(unittest.TestCase):
     def test_no_offer_means_no_panel(self):
         def script(page):
             self.assertTrue(page.is_hidden("#shortcutAsk"))
-        self.drive(script, extra_hooks=self.shortcut_hooks(offer={"ask": False}))
+        offer = {"ask": False, "places": OFFER["places"]}
+        self.drive(script, extra_hooks=self.shortcut_hooks(offer=offer))
 
-    def test_the_offer_is_the_only_time_it_comes_up(self):
-        # It used to leave a button behind on the Email & Setup tab. Turning
-        # the offer down is now the end of the subject for this launch, and
-        # nothing in the window brings it back.
+    def test_the_button_opens_the_same_panel_the_offer_would_have(self):
+        # The way back for someone who said "not now", or who wants a second
+        # copy of the icon somewhere else.
+        offer = {"ask": False, "places": OFFER["places"]}
+
         def script(page):
             self.assertTrue(page.is_hidden("#shortcutAsk"))
             page.click("#tabEmail")
-            self.assertEqual(page.locator("#shortcutOpen").count(), 0)
-        self.drive(script, extra_hooks=self.shortcut_hooks(offer={"ask": False}))
-        self.assertEqual(self.asked, [])
+            page.click("#shortcutOpen")
+            page.wait_for_selector("#shortcutAsk:visible")
+            # Nobody asked, so there's nothing to stop asking about.
+            self.assertTrue(page.is_hidden("#shortcutNever"))
+            page.click("#shortcutAdd")
+            page.wait_for_selector("#shortcutMsg:not([hidden])")
+            page.click("#shortcutSkip")
+            page.wait_for_selector("#shortcutAsk", state="hidden")
+        self.drive(script, extra_hooks=self.shortcut_hooks(offer=offer))
+        self.assertEqual(self.asked, [("add", ["desktop", "dock"], False)])
+
+    def test_the_button_is_gone_where_no_shortcut_can_be_made(self):
+        def script(page):
+            page.click("#tabEmail")
+            self.assertTrue(page.is_hidden("#shortcutBlock"))
+        self.drive(script, extra_hooks=self.shortcut_hooks(
+            offer={"ask": False, "places": []}))
+
+    def test_the_panel_starts_over_when_it_is_opened_again(self):
+        # Adding shuts everything in the panel down to a single Close button, so
+        # a second opening has to build it back up.
+        def script(page):
+            page.wait_for_selector("#shortcutAsk:visible")
+            page.click("#shortcutAdd")
+            page.wait_for_selector("#shortcutMsg:not([hidden])")
+            page.click("#shortcutSkip")
+            page.wait_for_selector("#shortcutAsk", state="hidden")
+            page.click("#tabEmail")
+            page.click("#shortcutOpen")
+            page.wait_for_selector("#shortcutAsk:visible")
+            self.assertFalse(page.is_hidden("#shortcutAdd"))
+            self.assertFalse(page.is_hidden("#shortcutPlaces"))
+            self.assertTrue(page.is_hidden("#shortcutMsg"))
+            self.assertEqual(page.text_content("#shortcutSkip").strip(), "Cancel")
+        self.drive(script, extra_hooks=self.shortcut_hooks())
 
     def test_closing_the_sheet_hands_focus_to_the_form_behind_it(self):
         def script(page):
@@ -1358,8 +1392,7 @@ class UITest(unittest.TestCase):
         self.drive(script, extra_hooks=self.shortcut_hooks())
 
     def test_the_panel_shows_the_places_python_offered(self):
-        # Only the first is ticked: a Dock or Start menu entry is more intrusive
-        # than a desktop icon, so it's opt-in.
+        # All of them ticked, so Add shortcut on its own makes the lot.
         def script(page):
             page.wait_for_selector("#shortcutAsk:visible")
             self.assertEqual(
@@ -1367,7 +1400,7 @@ class UITest(unittest.TestCase):
                     "#shortcutPlaces .tog",
                     "els => els.map(e => [e.dataset.place,"
                     " e.getAttribute('aria-pressed')])"),
-                [["desktop", "true"], ["dock", "false"]])
+                [["desktop", "true"], ["dock", "true"]])
             self.assertEqual(page.evaluate("document.activeElement.id"),
                              "shortcutAdd")
         self.drive(script, extra_hooks=self.shortcut_hooks())
@@ -1375,7 +1408,6 @@ class UITest(unittest.TestCase):
     def test_adding_sends_every_ticked_place_and_then_only_offers_to_close(self):
         def script(page):
             page.wait_for_selector("#shortcutAsk:visible")
-            page.click("#shortcutPlaces .tog[data-place=dock]")
             page.click("#shortcutAdd")
             page.wait_for_selector("#shortcutMsg:not([hidden])")
             self.assertIn("Done", page.text_content("#shortcutMsg"))

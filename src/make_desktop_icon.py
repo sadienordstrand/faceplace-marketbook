@@ -48,8 +48,10 @@ STATE_PATH = paths.SHORTCUTS_PATH
 APP_NAME = "Faceplace Marketbook"
 BLURB = "Search Facebook Marketplace across the country"
 
-# Where a shortcut can go, per system, in the order the window offers them. The
-# first is ticked by default; the others are more intrusive, so they're not.
+# Where a shortcut can go, per system, in the order the window offers them. All
+# of them are ticked by default: someone who wants the app quicker to reach
+# generally wants it in both places, and unticking one is easier than noticing
+# the second was never offered.
 PLACES = {"Darwin": ("desktop", "dock"), "Windows": ("desktop", "startmenu")}
 PLACE_LABELS = {"desktop": "Desktop", "dock": "Dock", "startmenu": "Start menu"}
 PLACE_PHRASES = {"desktop": "on your desktop", "dock": "in your Dock",
@@ -291,26 +293,23 @@ def stop_asking():
 
 
 def offer():
-    """What the settings window should put in front of someone on a launch:
-    nothing, unless this machine can make a shortcut, has none already, and
-    hasn't been told to drop the subject.
+    """What the settings window needs to know about shortcuts.
 
-    This is the only time it's asked. Someone who turns the offer down doesn't
-    get badgered by a button sitting in the settings for the rest of the app's
-    life — a launch that still hasn't a shortcut asks again by itself, and
-    `--desktop-icon` is there for anyone who changes their mind after saying
-    never.
+    `places` is everywhere this computer can put one, every one of them ticked,
+    and it comes back whether or not the question is being asked: the Email &
+    Setup tab carries a button that opens the same panel on demand, so someone
+    who said "not now" — or who wants a second copy after moving the folder —
+    has a way back that isn't the command line.
+
+    `ask` is whether to put that panel up unprompted, which happens on a launch
+    where this machine can make a shortcut, has none already, and hasn't been
+    told to drop the subject.
     """
     places = places_here()
-    if not places:
-        return {"ask": False}
-    if load_state().get("never_ask") or places_taken():
-        return {"ask": False}
-    # Only the first is ticked: a Dock or Start menu entry is more intrusive
-    # than a desktop icon, so it's opt-in.
+    ask = bool(places) and not (load_state().get("never_ask") or places_taken())
     return {
-        "ask": True,
-        "places": [{"id": p, "label": PLACE_LABELS[p], "on": p == places[0]}
+        "ask": ask,
+        "places": [{"id": p, "label": PLACE_LABELS[p], "on": True}
                    for p in places],
     }
 

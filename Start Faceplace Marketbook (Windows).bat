@@ -85,6 +85,12 @@ if "%STATUS%"=="75" (
     "%~f0" %*
 )
 
+rem --- 7. Close without a keypress when the app was simply quit ---------------
+rem 76 means the settings window was closed without starting anything, so there
+rem is nothing in this window worth reading. Quitting the app shouldn't leave a
+rem second window behind to be dismissed as well.
+if "%STATUS%"=="76" exit /b 0
+
 echo.
 if not "%STATUS%"=="0" echo Faceplace exited with an error ^(code %STATUS%^). The messages above say why.
 pause

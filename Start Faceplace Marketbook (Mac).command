@@ -68,6 +68,11 @@ fi
 # arrives as a rename, which leaves the copy bash is reading untouched.
 RELAUNCH=75
 
+# And when the app is quit by closing its window, there is nothing in this
+# terminal worth reading, so it goes without asking anyone to dismiss it. Quitting
+# the app should not leave a second window behind to be got rid of as well.
+CLOSED=76
+
 while :; do
     # --- 3. Install dependencies, but only when they change ------------------
     # The stamp file is a copy of requirements.txt, so editing that file is what
@@ -103,6 +108,8 @@ while :; do
     say "Starting again on the new version..."
     say ""
 done
+
+[ "$status" -eq "$CLOSED" ] && exit 0
 
 say ""
 if [ "$status" -ne 0 ]; then

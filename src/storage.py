@@ -115,14 +115,18 @@ def slugify(s):
     return re.sub(r"[^a-z0-9]+", "_", (s or "").lower()).strip("_") or "search"
 
 
-# A search can OR several queries together, and all of them spelled out would
-# make a folder name nobody can read. The whole search is recorded in run.json.
+# A backstop on the folder name, for a single query long enough to be a sentence.
+# The whole search is recorded in run.json either way.
 SLUG_MAX = 60
 
 
 def make_run_dir(query, base=None):
     """runs/<query-slug>_<mm-dd-yyyy>, suffixed _1, _2, ... so a run can never
-    overwrite an earlier one."""
+    overwrite an earlier one.
+
+    `query` is one query, not the whole search: a search that ORs several of them
+    together is named for the first, because every one of them spelled out runs
+    into the length a path is allowed to be."""
     parent = (base or RUNS_DIR)
     parent.mkdir(parents=True, exist_ok=True)
     slug = slugify(query)[:SLUG_MAX].strip("_") or "search"

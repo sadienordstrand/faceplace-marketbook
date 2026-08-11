@@ -220,8 +220,16 @@ def latest_version(timeout=CHECK_TIMEOUT):
 
 
 # What this launch was told, so the two things that want to know — the line in
-# the terminal and the banner in the window — don't ask twice.
-_asked = None
+# the terminal and the banner in the window — don't ask twice. The sentinel is
+# its own object rather than None because None is itself an answer: it's what a
+# launch with no connection and nothing remembered ends up with, and treating
+# that as "not asked yet" would spend CHECK_TIMEOUT again on every lookup.
+_UNASKED = object()
+_asked = _UNASKED
+# Whether that answer came from the repository just now or from what an earlier
+# launch wrote down. Worth telling apart out loud: "up to date" on the strength
+# of yesterday's answer is a weaker claim than it sounds.
+_reached = False
 
 
 def check(force=False):
@@ -236,26 +244,42 @@ def check(force=False):
     to the last one we did, which is what keeps the banner up on a machine that
     heard about an update yesterday and is offline today.
     """
-    global _asked
-    if _asked is not None and not force:
+    global _asked, _reached
+    if _asked is not _UNASKED and not force:
         return _asked
-    known = load_state().get("latest")
-    _asked = latest_version() or known
+    fresh = latest_version()
+    _reached = fresh is not None
+    _asked = fresh or load_state().get("latest")
     save_state(last_check=datetime.now().isoformat(timespec="seconds"),
                latest=_asked)
     return _asked
 
 
 def available(force=False):
-    """What the settings window needs to decide whether to say anything."""
+    """What the settings window needs to decide whether to say anything.
+
+    `show` is the whole of what the window reads. `why` is for the terminal
+    line, which says something either way and so needs to tell apart the several
+    different reasons there's nothing to offer — they were all one silence
+    before, and that silence was impossible to tell from a check that never ran.
+    """
+    here = {"current": __version__}
     if managed_by_git():
-        return {"show": False}
+        return {"show": False, "why": "clone", **here}
     newest = check(force=force)
-    if not newest or not is_newer(newest, __version__):
-        return {"show": False, "current": __version__}
+    if not newest:
+        return {"show": False, "why": "unreachable", **here}
+    found = {**here, "version": newest, "checked": _reached}
+    if is_newer(__version__, newest):
+        # Only ever happens to whoever is writing this: the version has been
+        # bumped here and not pushed, or was pushed a minute ago and the CDN in
+        # front of raw.githubusercontent is still handing out the old file.
+        return {"show": False, "why": "ahead", **found}
+    if not is_newer(newest, __version__):
+        return {"show": False, "why": "current", **found}
     if not force and load_state().get("skipped") == newest:
-        return {"show": False, "current": __version__}
-    return {"show": True, "version": newest, "current": __version__}
+        return {"show": False, "why": "skipped", **found}
+    return {"show": True, "why": "newer", **found}
 
 
 def skip(version):
@@ -580,16 +604,62 @@ def _download_and_install(restart):
             "message": f"Updated to {version}. {ending}"}
 
 
+def news(offer):
+    """What `available` found, as the end of a sentence that began "Checking for
+    updates... ". Facts only: what to do about them differs between the terminal
+    and the command line, so each of those adds its own.
+    """
+    version, current = offer.get("version"), offer.get("current")
+    if offer.get("why") == "unreachable":
+        return ("no answer. Couldn't reach GitHub, and there's no earlier "
+                "answer to fall back on, so this launch can't tell either way.")
+    # Said after the answer rather than instead of it, because the answer still
+    # stands — it's just older than it looks.
+    old = "" if offer.get("checked") else (
+        " Couldn't reach GitHub just now, so that's what the last launch heard.")
+    if offer.get("why") == "ahead":
+        return (f"this copy is version {current}, which is ahead of the "
+                f"repository ({version}). A version pushed in the last few "
+                f"minutes can take that long to show up here.{old}")
+    if offer.get("why") == "current":
+        return f"up to date. This is version {current}.{old}"
+    if offer.get("why") == "skipped":
+        return (f"version {version} is available, and you set that one aside, "
+                f"so the window won't ask about it again.{old}")
+    return f"version {version} is available. This is {current}.{old}"
+
+
 def announce():
-    """One line in the terminal on the way past, for runs with no window."""
+    """Say what the check found, in the terminal, on the way past.
+
+    It reports even when there's no news. A check that runs on every launch and
+    only speaks up when it has something to offer leaves no way to tell being up
+    to date apart from a check that quietly failed, or one that never ran at all
+    — and the difference matters most to the person who has just pushed a new
+    version and is waiting to see it appear.
+    """
+    if managed_by_git():
+        # No check at all: apply() would throw away uncommitted work, so a clone
+        # is left out of this entirely and should hear why rather than nothing.
+        print("\nNot checking for updates: this folder is a git clone, so it "
+              "updates with git pull.\n")
+        return
+    # Printed before the asking, so a connection that's going to time out spends
+    # those seconds under a line explaining the wait.
+    print("\nChecking for updates... ", end="", flush=True)
     try:
         offer = available()
-    except Exception:
+    except Exception as e:
+        # available swallows every network failure by itself, so reaching here
+        # means something else went wrong. Still not worth stopping a run over.
+        print(f"the check couldn't be made. {in_plain_words(e)}\n")
         return
+    print(news(offer))
     if offer.get("show"):
-        print(f"\n>> Faceplace Marketbook {offer['version']} is available "
-              f"(this is {offer['current']}). Double-click the launcher to open "
-              f"the window that installs it.\n")
+        # Not "the window opening next": this same line goes out on a scheduled
+        # run, where no window opens at all.
+        print("  The settings window has a button to install it.")
+    print()
 
 
 def ui_hooks():
@@ -614,15 +684,14 @@ def main(argv=None):
         # promise: whoever typed this can start the app again themselves.
         answer = update_now(restart=False)
         raise SystemExit(answer.get("error") or answer["message"])
-    newest = check(force=True)
-    if not newest:
-        raise SystemExit("Couldn't reach GitHub to ask what the newest version "
-                         "is. Check your internet connection.")
-    if is_newer(newest, __version__):
-        print(f"Version {newest} is available. This is {__version__}.")
+    # force, so a version set aside in the window is still reported to whoever
+    # went looking for it on purpose.
+    offer = available(force=True)
+    if offer["why"] == "unreachable":
+        raise SystemExit(f"Checked for updates... {news(offer)}")
+    print(f"Checked for updates... {news(offer)}")
+    if offer["show"]:
         print("Run this again with --update to install it.")
-    else:
-        print(f"This is version {__version__}, which is the newest one.")
 
 
 if __name__ == "__main__":

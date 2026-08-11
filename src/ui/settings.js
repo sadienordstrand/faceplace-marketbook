@@ -849,18 +849,21 @@ $('runList').addEventListener('keydown', e => {
   if (card) { e.preventDefault(); disarmRunDeletes(); openRun(card); }
 });
 
-// ------------------------------------------------- the shortcut offer
-// Shown by itself on a launch where there's no shortcut yet and nobody has
+// ------------------------------------------------- the shortcut panel
+// Put up by itself on a launch where there's no shortcut yet and nobody has
 // asked to be left alone about it; Python decides that and sends the answer in.
-// There's no way back to it from inside the window, on the grounds that someone
-// who doesn't want one when offered doesn't want one at all — and a launch that
-// still hasn't a shortcut asks again anyway.
+// The same panel is reachable any time from the Email & Setup tab, which is the
+// way back for someone who said "not now" and changed their mind, or who wants a
+// second copy of the icon somewhere else.
 let shortcutSettled = false;   // true once Python has recorded what they chose
+let shortcutUnprompted = false;  // the launch offer, rather than the button
 
 function closeShortcut() {
   shortcutOpen = false;
   $('shortcutAsk').hidden = true;
-  $('query').focus();
+  // Back to whatever asked for it: the form the offer was covering, or the
+  // button that opened it.
+  $(shortcutUnprompted ? 'query' : 'shortcutOpen').focus();
 }
 
 $('shortcutSkip').onclick = async () => {
@@ -900,22 +903,43 @@ $('shortcutAsk').addEventListener('click', e => {
   if (e.target === $('shortcutAsk')) $('shortcutSkip').click();
 });
 
-function openShortcut() {
+// `unprompted` is the launch offer; without it this is the button on the Email &
+// Setup tab. Everything the panel does to itself on the way out is undone here
+// rather than on close, so opening it a second time starts from the top.
+function openShortcut(unprompted) {
+  shortcutUnprompted = !!unprompted;
+  shortcutSettled = false;
+  say('shortcutMsg', '');
+  $('shortcutTitle').textContent = unprompted ? 'Add a shortcut?'
+                                              : 'Add a shortcut';
   $('shortcutWhy').textContent = SHORTCUT.why || '';
   $('shortcutNote').textContent = SHORTCUT.note || '';
   $('shortcutNote').hidden = !SHORTCUT.note;
+  $('shortcutPlaces').hidden = false;
   $('shortcutPlaces').innerHTML = (SHORTCUT.places || []).map(p =>
     `<div class="tog" data-place="${escHtml(p.id)}" role="button" tabindex="0"
           aria-pressed="${p.on ? 'true' : 'false'}">`
     + `<span class="box">✓</span>${escHtml(p.label)}</div>`).join('');
+  // "Don't ask again" is only an answer to being asked.
+  $('shortcutNever').hidden = !unprompted;
+  $('shortcutNever').setAttribute('aria-pressed', 'false');
+  $('shortcutAdd').hidden = false;
+  $('shortcutAdd').disabled = false;
+  // "Not now" answers a question. Nobody asked one when the button was clicked.
+  $('shortcutSkip').textContent = unprompted ? 'Not now' : 'Cancel';
+  $('shortcutSkip').className = 'cancel';
   shortcutOpen = true;
   $('shortcutAsk').hidden = false;
   $('shortcutAdd').focus();
 }
+
+// Only on a computer this app knows how to make a shortcut on.
+$('shortcutBlock').hidden = !(SHORTCUT.places || []).length;
+$('shortcutOpen').onclick = () => openShortcut();
 
 setQueries(DEFAULTS.queries || (DEFAULTS.query ? [DEFAULTS.query] : []));
 if (DEFAULTS.exclude) $('exclude').value = DEFAULTS.exclude;
 showTab('new');
 refresh();
 $('query').focus();
-if (SHORTCUT.ask) openShortcut();
+if (SHORTCUT.ask) openShortcut(true);

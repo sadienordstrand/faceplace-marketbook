@@ -129,7 +129,8 @@ class Redirected(unittest.TestCase):
                             ("__version__", "1.0.0"),
                             # Each test is its own launch, so each starts having
                             # asked nobody anything.
-                            ("_asked", None)):
+                            ("_asked", updater._UNASKED),
+                            ("_reached", False)):
             patch = mock.patch.object(updater, name, value)
             patch.start()
             self.addCleanup(patch.stop)
@@ -395,12 +396,86 @@ class Reporting(Redirected):
         # A version that was waved away before is no longer being refused.
         self.assertIsNone(updater.load_state()["skipped"])
 
-    def test_the_terminal_line_only_appears_when_there_is_news(self):
-        with mock.patch.object(updater, "available",
-                               return_value={"show": False}):
-            with mock.patch("builtins.print") as said:
+
+class Reporting(Redirected):
+    """The terminal line, which says something on every launch.
+
+    Speaking up only when there was news is what made an up-to-date copy
+    indistinguishable from a check that failed quietly, and from one that never
+    ran at all. So each of the reasons there's nothing to offer has its own
+    words, and this is where they're pinned down. This copy is 1.0.0 throughout.
+    """
+
+    def said(self, remote):
+        """announce(), with the repository answering `remote` — None for a
+        connection that didn't. Whitespace flattened so the assertions below
+        don't depend on where the lines wrap."""
+        with mock.patch.object(updater, "latest_version", return_value=remote):
+            with contextlib.redirect_stdout(io.StringIO()) as out:
                 updater.announce()
-        said.assert_not_called()
+        return " ".join(out.getvalue().split())
+
+    def test_the_check_is_announced_before_it_is_made(self):
+        # The line goes up first, so the wait on a connection that's timing out
+        # happens under an explanation of itself rather than under nothing.
+        seen = []
+
+        def answering():
+            seen.append(sys.stdout.getvalue())
+            return "1.0.0"
+
+        with mock.patch.object(updater, "latest_version", answering):
+            with contextlib.redirect_stdout(io.StringIO()):
+                updater.announce()
+        self.assertIn("Checking for updates", seen[0])
+
+    def test_being_up_to_date_is_said_out_loud(self):
+        said = self.said("1.0.0")
+        self.assertIn("Checking for updates", said)
+        self.assertIn("up to date", said)
+        self.assertIn("1.0.0", said)
+
+    def test_a_newer_version_is_reported_with_somewhere_to_go(self):
+        said = self.said("1.1.0")
+        self.assertIn("1.1.0 is available", said)
+        self.assertIn("This is 1.0.0", said)
+        self.assertIn("window", said)
+
+    def test_a_copy_ahead_of_the_repository_is_told_so_and_why(self):
+        # The case that sent someone looking for this line: the version bumped
+        # and pushed, and the CDN in front of raw.githubusercontent still handing
+        # out the file from before the push.
+        said = self.said("0.9.0")
+        self.assertIn("ahead of the repository", said)
+        self.assertIn("0.9.0", said)
+        self.assertIn("few minutes", said)
+
+    def test_a_version_that_was_set_aside_still_gets_a_mention(self):
+        # The window is the thing that was told to drop it. Someone reading the
+        # terminal asked no such thing.
+        updater.skip("1.1.0")
+        said = self.said("1.1.0")
+        self.assertIn("1.1.0 is available", said)
+        self.assertIn("set that one aside", said)
+
+    def test_a_failed_check_says_so_rather_than_nothing(self):
+        said = self.said(None)
+        self.assertIn("Couldn't reach GitHub", said)
+
+    def test_an_answer_from_memory_is_not_passed_off_as_a_fresh_one(self):
+        updater.save_state(latest="1.1.0")
+        said = self.said(None)
+        self.assertIn("1.1.0 is available", said)
+        self.assertIn("the last launch heard", said)
+
+    def test_a_clone_hears_why_it_is_being_left_alone(self):
+        (self.root / ".git").mkdir()
+        with mock.patch.object(updater, "latest_version") as asked:
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                updater.announce()
+        self.assertIn("git pull", out.getvalue())
+        # And no seconds are spent on a question whose answer it can't act on.
+        asked.assert_not_called()
 
 
 class Restarting(Redirected):

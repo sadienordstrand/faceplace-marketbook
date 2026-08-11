@@ -38,8 +38,9 @@ import locations
 import paths
 import storage
 import updater
-from browser import (SessionExpired, ensure_logged_in, fmt_dur, goto_with_retry,
-                     human_pause, keep_awake, launch_context)
+from browser import (SessionExpired, WindowClosed, ensure_logged_in, fmt_dur,
+                     goto_with_retry, human_pause, keep_awake, launch_context,
+                     stop_if_window_closed)
 from descriptions import (DEFAULT_PACE, PACES, PAGE_WORK_SECONDS,
                           PHOTO_SAVE_SECONDS, fetch_thumbs,
                           retrieve_descriptions)
@@ -192,6 +193,16 @@ def describe_radius(km, note=True):
     return f"~{miles} mi ({km} km){warn}"
 
 
+def show_gallery(path):
+    """The finished gallery, in the everyday browser. It's self-contained — the
+    photos are baked in — so the file URL is all the browser needs."""
+    print(f"Opening {path}")
+    try:
+        webbrowser.open(Path(path).resolve().as_uri())
+    except Exception as e:
+        print(f"  couldn't open a browser ({e}); open the file yourself.")
+
+
 def discard_empty_run_dir(run_dir):
     """Take back the folder a run made for itself, if it never wrote anything.
 
@@ -249,6 +260,12 @@ def preflight_pause(page, url, skip=False):
     except EOFError:
         print("(no terminal to wait on — starting)")
         return km
+    # Closing the browser is the other way to answer this prompt, and there's no
+    # sweep to start without it. Nothing has been gathered yet either, so this is
+    # the one stage where stopping is simply quitting.
+    if page.is_closed():
+        raise WindowClosed("The Facebook window was closed before the sweep "
+                           "started.")
 
     after = read_radius_km(page)
     if after and after != km:
@@ -292,6 +309,7 @@ def collect_city(page, max_scrolls, is_keeper=None, patience=4,
                 snap = page.evaluate(CARDS_JS)
                 break
             except Exception as e:
+                stop_if_window_closed(e)
                 if attempt == 0:
                     human_pause(2.0, 3.0)
                 else:
@@ -341,7 +359,13 @@ def collect_city(page, max_scrolls, is_keeper=None, patience=4,
         for n in range(1, max_scrolls + 1):
             scroll_no = n
             lap = time.time()
-            page.mouse.wheel(0, 5000)
+            try:
+                page.mouse.wheel(0, 5000)
+            except Exception as e:
+                # Scrolling is the call a closed window interrupts, since it's
+                # where a city spends nearly all of its time.
+                stop_if_window_closed(e)
+                raise
             human_pause(1.5, 3.0)
             cur = snapshot()
             lap_seconds.append(time.time() - lap)
@@ -424,7 +448,8 @@ def run(query, scrolls, exact, out_csv=None, only=None, keep_all=False,
     Ctrl-C is a way of finishing, not a way of failing. At any stage it stops
     the work, keeps everything gathered up to that moment, and goes straight to
     the CSV and the gallery — so an hour of sweeping is never thrown away for
-    wanting the second hour back.
+    wanting the second hour back. Closing the browser window by hand ends the
+    run the same way, for the same reason: see browser.WindowClosed.
 
     A scheduled search passes the extra arguments: run_dir to write into
     the same folder every time, previous_rows for what the last run found,
@@ -457,7 +482,10 @@ def run(query, scrolls, exact, out_csv=None, only=None, keep_all=False,
     elif out_csv:
         out_path, run_dir = Path(out_csv), None
     else:
-        run_dir = storage.make_run_dir(label_all)
+        # Named for the first query alone. Several of them spelled out makes a
+        # folder name too long for the systems that have to hold it and too long
+        # for anyone to read; the whole search is in run.json either way.
+        run_dir = storage.make_run_dir(queries[0])
         out_path = run_dir / "results.csv"
     con = storage.open_db(storage.DB_PATH)
     debug_root = (run_dir / "debug") if run_dir else paths.DEBUG_DIR
@@ -519,13 +547,15 @@ def run(query, scrolls, exact, out_csv=None, only=None, keep_all=False,
                 page, build_search_url(first_seg, queries[0], exact, min_price,
                                        max_price),
                 skip=no_pause)
-        except KeyboardInterrupt:
+        except KeyboardInterrupt as e:
             # Nothing has been searched yet, so there is nothing to salvage and
             # nothing to leave behind either.
             con.close()
             discard_empty_run_dir(run_dir)
-            raise SystemExit("\nStopped before the sweep started. Nothing was "
-                             "saved.")
+            how = ("The Facebook window was closed" if isinstance(e, WindowClosed)
+                   else "Stopped")
+            raise SystemExit(f"\n{how} before the sweep started. Nothing was "
+                             f"saved.")
         for ci, (label, seg) in enumerate(locs.items()):
             # Facebook's URL takes one query, so several queries means sweeping
             # the city several times. The sightings are merged by listing id
@@ -882,13 +912,7 @@ def run(query, scrolls, exact, out_csv=None, only=None, keep_all=False,
         print(f"Run folder: {run_dir}")
     print(f"\nFinished in {fmt_dur(elapsed)}.")
     if gallery_path and open_gallery:
-        # The gallery is self-contained (images baked in), so the file URL is
-        # all the browser needs.
-        print(f"Opening {gallery_path}")
-        try:
-            webbrowser.open(gallery_path.resolve().as_uri())
-        except Exception as e:
-            print(f"  couldn't open a browser ({e}); open the file yourself.")
+        show_gallery(gallery_path)
     return {
         "status": "ok",
         "query": label_all,
@@ -988,7 +1012,7 @@ def login_only():
     abandoned sweep."""
     print("Opening Facebook. If you're already logged in, this finishes by itself.")
     with sync_playwright() as p:
-        ctx = launch_context(p)
+        ctx = launch_context(p, notice=False)
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
         ensure_logged_in(page)
         # Closing the context is what writes the session to the browser profile.
@@ -1004,7 +1028,7 @@ def set_radius():
     the 500-mile maximum, which is what the saved city spacing is built around."""
     seg = next(iter(locations.load_locations().values()))
     with sync_playwright() as p:
-        ctx = launch_context(p)
+        ctx = launch_context(p, notice=False)
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
         ensure_logged_in(page)
         page.goto(build_search_url(seg, "test", False), wait_until="domcontentloaded")
@@ -1044,14 +1068,35 @@ def why_wait(e):
             "one to finish.")
 
 
+# What the launchers read as "closed, with nothing in the terminal worth
+# reading" — the settings window shut without starting anything. They skip their
+# "press Return to close this window" on it, so quitting the app quits the app
+# rather than leaving a terminal behind to be dismissed as well.
+CLOSED_EXIT = 76
+
+# How long the settings window is given to finish drawing itself before the
+# gallery is opened over it. Only cosmetic: without it the browser can win the
+# race and end up behind a window that appeared afterwards.
+SETTLE_MS = 400
+
+
 def run_from_ui(a):
-    """Collect settings from the pre-flight window, then run with them.
-    Command-line values seed the form, so --query x --ui opens it pre-filled."""
+    """The settings window, and every search started from it, until it's closed.
+
+    That window is the app as far as anyone using it is concerned, so a finished
+    search comes back to it rather than ending the program: the window opens
+    again and the results open in the browser on top of it, which puts the
+    listings in front and leaves the app ready for the next search underneath.
+    Closing the window is how the app is quit — see CLOSED_EXIT.
+
+    Command-line values seed the form, so --query x --ui opens it pre-filled;
+    after that the form comes back holding whatever was last searched for.
+    """
     import settings_ui
     import scheduling
     import make_desktop_icon
     import past_runs
-    locs = locations.load_locations()
+    locs = {}
 
     def ui_add_city(label, text):
         updated, err = locations.add_location(label, text)
@@ -1061,60 +1106,90 @@ def run_from_ui(a):
         updated, err = locations.remove_location(label)
         return list(updated.keys()), err
 
-    cfg = settings_ui.collect_settings(
-        list(locs.keys()), PACES,
-        {"queries": query_list(a.query), "exclude": a.exclude or "",
-         "pace": a.pace, "max_queries": MAX_QUERIES,
-         "page_work": PAGE_WORK_SECONDS, "photo_save": PHOTO_SAVE_SECONDS},
-        on_add=ui_add_city, on_remove=ui_remove_city,
-        builtins=list(locations.base_locations()),
-        # Four unrelated sets of hooks: the scheduled searches and email tabs, the
-        # runs already on disk, the offer of a desktop shortcut on a launch that
-        # hasn't one yet, and the offer of a newer version when this copy is
-        # behind the repository.
-        hooks={**scheduling.ui_hooks(), **past_runs.ui_hooks(),
-               **make_desktop_icon.ui_hooks(), **updater.ui_hooks()})
-    if not cfg:
-        print("Cancelled — nothing was run.")
-        return
-    # "Run now" on a scheduled search has to wait for this window to close, because
-    # the window is holding the one Chromium profile the session lives in.
-    if cfg.get("action") == "run_saved":
-        scheduling.tick(force=cfg["id"])
-        return
-    # The code on disk is newer than the code this process loaded, so there's
-    # nothing safe left to do here. Exiting with the launcher's code is what
-    # gets the app started again on the version that was just installed.
-    if cfg.get("action") == "updated":
-        again = updater.relaunch_code()
-        if again is None:
-            print("Updated. Start Faceplace Marketbook again to use the new "
-                  "version.")
-            return
-        print("Updated. Restarting on the new version...")
-        raise SystemExit(again)
-    asked_for = " OR ".join(f"'{q}'" for q in query_list(cfg.get("queries")))
-    print(f"\nStarting: {'queries' if len(cfg.get('queries') or []) > 1 else 'query'} "
-          f"{asked_for}, {len(cfg['cities'])} "
-          f"cit{'y' if len(cfg['cities']) == 1 else 'ies'}.")
-    try:
-        with scheduling.run_lock("a manual run"):
-            run(cfg["queries"], DEFAULT_SCROLLS, cfg["exact"], a.out, None,
-                a.keep_all, cfg["debug_dump"], a.match, cfg["limit"],
-                a.thumbs_dir,
-                # No do_gallery: the window doesn't offer to skip it. A run
-                # whose results can only be read as a CSV is a run nobody
-                # wanted, and it costs seconds at the end of an hour.
-                do_descriptions=cfg["do_descriptions"], do_thumbs=cfg["do_thumbs"],
-                pace=cfg["pace"],
-                exclude=[t.strip() for t in cfg["exclude"].split(",") if t.strip()],
-                min_price=cfg["min_price"], max_price=cfg["max_price"],
-                min_year=cfg["min_year"], max_year=cfg["max_year"],
-                include_no_year=cfg["include_no_year"],
-                only_labels=cfg["cities"], open_gallery=not a.no_open,
-                no_pause=a.no_pause)
-    except scheduling.AlreadyRunning as e:
-        print(f"\nNot starting: {e}.\n{why_wait(e)}")
+    defaults = {"queries": query_list(a.query), "exclude": a.exclude or "",
+                "pace": a.pace, "max_queries": MAX_QUERIES,
+                "page_work": PAGE_WORK_SECONDS, "photo_save": PHOTO_SAVE_SECONDS}
+    gallery = None
+    while True:
+        # A city added last time round is in the list this time.
+        locs = locations.load_locations()
+        shown = []
+
+        def ready(page, path=gallery):
+            page.wait_for_timeout(SETTLE_MS)
+            shown.append(path)
+            show_gallery(path)
+
+        try:
+            cfg = settings_ui.collect_settings(
+                list(locs.keys()), PACES, defaults,
+                on_add=ui_add_city, on_remove=ui_remove_city,
+                builtins=list(locations.base_locations()),
+                on_ready=ready if gallery else None,
+                # Four unrelated sets of hooks: the scheduled searches and email
+                # tabs, the runs already on disk, the offer of a desktop shortcut
+                # on a launch that hasn't one yet, and the offer of a newer
+                # version when this copy is behind the repository.
+                hooks={**scheduling.ui_hooks(), **past_runs.ui_hooks(),
+                       **make_desktop_icon.ui_hooks(), **updater.ui_hooks()})
+        finally:
+            # Results nobody asked to wait for. A window that couldn't open is a
+            # reason to say where the last search went, not to swallow it.
+            if gallery and not shown:
+                show_gallery(gallery)
+        gallery = None
+        # The window was closed, or Cancel was pressed. Nothing is running and
+        # nothing is half-finished, so there's nothing to keep the app open for.
+        if not cfg:
+            raise SystemExit(CLOSED_EXIT)
+        # "Run now" on a scheduled search has to wait for this window to close,
+        # because the window is holding the one Chromium profile the session
+        # lives in. Its results go out by email, so there's no gallery to open.
+        if cfg.get("action") == "run_saved":
+            scheduling.tick(force=cfg["id"])
+            continue
+        # The code on disk is newer than the code this process loaded, so there's
+        # nothing safe left to do here. Exiting with the launcher's code is what
+        # gets the app started again on the version that was just installed.
+        if cfg.get("action") == "updated":
+            again = updater.relaunch_code()
+            if again is None:
+                print("Updated. Start Faceplace Marketbook again to use the new "
+                      "version.")
+                return
+            print("Updated. Restarting on the new version...")
+            raise SystemExit(again)
+        defaults = {**defaults, "queries": query_list(cfg.get("queries")),
+                    "exclude": cfg.get("exclude") or "", "pace": cfg["pace"]}
+        asked_for = " OR ".join(f"'{q}'" for q in query_list(cfg.get("queries")))
+        print(f"\nStarting: "
+              f"{'queries' if len(cfg.get('queries') or []) > 1 else 'query'} "
+              f"{asked_for}, {len(cfg['cities'])} "
+              f"cit{'y' if len(cfg['cities']) == 1 else 'ies'}.")
+        try:
+            with scheduling.run_lock("a manual run"):
+                summary = run(
+                    cfg["queries"], DEFAULT_SCROLLS, cfg["exact"], a.out, None,
+                    a.keep_all, cfg["debug_dump"], a.match, cfg["limit"],
+                    a.thumbs_dir,
+                    # No do_gallery: the window doesn't offer to skip it. A run
+                    # whose results can only be read as a CSV is a run nobody
+                    # wanted, and it costs seconds at the end of an hour.
+                    do_descriptions=cfg["do_descriptions"],
+                    do_thumbs=cfg["do_thumbs"], pace=cfg["pace"],
+                    exclude=[t.strip() for t in cfg["exclude"].split(",")
+                             if t.strip()],
+                    min_price=cfg["min_price"], max_price=cfg["max_price"],
+                    min_year=cfg["min_year"], max_year=cfg["max_year"],
+                    include_no_year=cfg["include_no_year"],
+                    only_labels=cfg["cities"],
+                    # Held back until the window is up again, so the gallery
+                    # lands in front of it rather than behind it.
+                    open_gallery=False, no_pause=a.no_pause)
+        except scheduling.AlreadyRunning as e:
+            print(f"\nNot starting: {e}.\n{why_wait(e)}")
+            continue
+        gallery = None if a.no_open else (summary or {}).get("gallery")
 
 
 def main():
@@ -1257,4 +1332,10 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except WindowClosed as e:
+        # Every stage that has something to save catches this for itself. Reaching
+        # here means one that hadn't — logging in, or setting the radius — so all
+        # that's left is to say so plainly instead of printing a traceback.
+        raise SystemExit(f"\n{e}")

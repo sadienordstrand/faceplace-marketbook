@@ -139,6 +139,47 @@ cloned](#updating-a-copy-that-was-never-cloned).
 | `--debug-dump` | Save raw Facebook JSON payloads for troubleshooting extraction. |
 | `--descriptions CSV` / `--download-thumbs CSV` | One-off passes over an existing CSV instead of a sweep. |
 
+## The app window
+
+`run_from_ui()` is a loop, not a single pass, because the settings window is the
+app as far as anyone using it is concerned. It opens the window, runs whatever the
+window submitted, and opens the window again — so a finished search leaves you
+somewhere you can start another one instead of at a dead terminal.
+
+The order at the end of a run matters and is the reason `run()` isn't the one
+opening the gallery any more. The window goes up first; the gallery is opened from
+the `on_ready` callback, once the page is loaded, which puts the listings in front
+and the app underneath them. `run_from_ui()` therefore passes `open_gallery=False`
+and holds the path until the next opening. If that opening fails, a `finally`
+opens the gallery anyway: a window that couldn't start is a reason to say where the
+results went, not to swallow them.
+
+Closing the window, or pressing Cancel, is how the app is quit — nothing is
+running and nothing is half-finished at that point, so there is nothing left to
+stay open for. It exits with `CLOSED_EXIT` (76), which the launchers read as
+"nothing in this terminal is worth reading" and skip their *press Return to close
+this window* on, so quitting the app doesn't leave a terminal behind to be
+dismissed as well. (Whether the terminal window itself disappears is your
+terminal's own setting — on macOS, Terminal ▸ Settings ▸ Profiles ▸ Shell ▸ *When
+the shell exits*.) The other exit code the launchers watch for is 75, which asks
+to be started again on a version the app has just installed over itself.
+
+"Run now" on a scheduled search comes back to the window too, but with no gallery:
+those results go out by email, and the run itself is `scheduling.tick(force=...)`,
+which passes `open_gallery=False` for the same reason.
+
+### Shortcuts
+
+`make_desktop_icon.offer()` answers two separate questions, which is why it always
+returns a `places` list and only sometimes an `ask` of true. `places` is everywhere
+this machine can put a shortcut, all of them ticked, so **Add shortcut** on its own
+does the lot; `ask` is whether to put the panel up unprompted, which happens on a
+launch with no shortcut anywhere and no `never_ask` recorded. The Email & Setup tab
+has a **Create a shortcut** button that opens the same panel from the list alone,
+so saying "not now", or moving the folder and stranding an icon, doesn't leave the
+command line as the only way back. Adding replaces whatever is already there,
+which is exactly what fixing a moved folder needs.
+
 ## The four stages
 
 1. **Sweep** — visit each location and scroll its results, filtering as it goes
@@ -230,8 +271,10 @@ same reason: a card that answers a different query than the one this pass is
 scrolling for is still a real match, and will be kept.
 
 `run.json` records the whole search as `query` (the queries joined with " OR ",
-which is also what the CSV's `query` column and the run folder's name carry) and
-as `queries`, the list. Per-city scroll counters are summed across the queries so
+which is also what the CSV's `query` column carries) and as `queries`, the list.
+The run folder is named for the **first query alone**: every one of them spelled
+out runs into the length a path is allowed to be, and the whole search is written
+down inside the folder either way. Per-city scroll counters are summed across the queries so
 that everything downstream still reads one line per city, with the individual
 queries kept under `per_city.<city>.per_query` when there was more than one.
 
@@ -410,6 +453,41 @@ nothing to save; it also takes the run folder back with it, since the folder is
 made before the browser opens and Past searches lists folders. And a stop that
 finds nothing at all writes nothing at all, rather than leaving an empty run
 behind.
+
+### Closing the browser window
+
+Closing the window a run is driving is the same ending, and is delivered as one.
+`browser.WindowClosed` subclasses `KeyboardInterrupt`, so all four handlers above
+catch it without having to know it exists. `stop_if_window_closed()` raises it,
+and is called from the handlers that would otherwise shrug an error off and carry
+on: the navigation retry, the card snapshot, the per-listing failure in
+`retrieve_descriptions()`, the per-photo failure in `save_image()`. Those are
+right to be forgiving about one page — but once the window is gone, every page
+left fails the same way, and thousands of silent failures in a row is the one
+response worse than stopping.
+
+Two places poll instead, having no failing call to notice. The login wait, whose
+`is_logged_in()` answers False for a window that isn't there and would otherwise
+sit out its full ten minutes; and the preflight pause, which is blocked on
+`input()` and checks `page.is_closed()` once that's answered.
+
+What this replaces was worse than a lost run. The error came out of whichever
+Playwright call was in flight and ended the process without unwinding, which left
+the run lock on disk and the Chromium profile locked — so the *next* launch
+couldn't start either, until the lock aged out after `LOCK_STALE_HOURS`. Ending as
+an interrupt fixes both, because the interrupt path already lets go of everything
+on its way to writing the CSV.
+
+The window says so while it works: `launch_context()` adds an init script
+(`NOTICE_JS`) drawing a fixed note along the bottom of every page — closing this
+window ends the search, press Ctrl-C in the terminal instead. `pointer-events:
+none`, because the login, the popups and the radius control all need clicking and
+nothing this app draws over Facebook may ever be in the way. A real "are you
+sure?" isn't available: Chromium's own leave-the-page prompt arrives as a
+`beforeunload` dialog, which Playwright intercepts and answers itself, so nobody
+closing the window would ever see it. `notice=False` for the two windows opened
+for a person to use — `--login` and `--set-radius` — where closing the window when
+you're done is how they're meant to end.
 
 **After a Ctrl-C, nothing may talk to the browser again.** This is the rule the
 whole thing hangs on, and it isn't obvious. Playwright's sync API runs on a
@@ -595,10 +673,34 @@ two seconds is about to have a much harder time driving Facebook.
 
 Asking every launch means asking *once* per launch. A run that prints the
 terminal notice and then opens the window would otherwise pay for two lookups
-and two timeouts, so the answer is memoised in the process for both to read.
-`.state/update.json` keeps the last answer across launches, which is what lets
-the banner stay up on a machine that heard about an update yesterday and is
-offline today, along with any version that was waved away.
+and two timeouts, so the answer is memoised in the process for both to read —
+including an answer of "don't know", which is why the sentinel for "not asked
+yet" is its own object rather than `None`. `.state/update.json` keeps the last
+answer across launches, which is what lets the banner stay up on a machine that
+heard about an update yesterday and is offline today, along with any version that
+was waved away.
+
+`announce()` narrates the check in the terminal, and it reports even when there's
+no news. It used to speak up only when an update was waiting, which made three
+quite different situations look identical from the outside: up to date, a check
+that failed silently, and a check that never ran. That's a bad trade for one line
+of output, and it's most confusing for the one person guaranteed to hit it — the
+author, watching for a version they just pushed and unable to tell CDN lag from a
+bug. So `available()` returns a `why` alongside `show`, and each value of it gets
+its own sentence:
+
+| `why` | What the line says |
+| --- | --- |
+| `clone` | No check was made, because a clone updates with `git pull`. |
+| `unreachable` | GitHub couldn't be reached and nothing was remembered, so this launch can't tell either way. |
+| `ahead` | This copy is *newer* than the repository — pushed moments ago, or not pushed at all. |
+| `current` | Up to date, and which version that is. |
+| `skipped` | A newer version exists and this copy was told to stop asking about it. |
+| `newer` | The offer, plus where the button is. |
+
+The window reads `show` and ignores the rest. Any answer that came from
+`.state/update.json` rather than from GitHub says so, because "up to date" on the
+strength of yesterday's answer is a weaker claim than it sounds.
 
 Installing downloads the branch zip from `codeload.github.com`, unpacks it to a
 temp folder, and refuses to go on unless what came back has the files this
