@@ -27,8 +27,8 @@ Works on Windows and Mac.
   - [On a Mac, check where this folder lives first](#on-a-mac-check-where-this-folder-lives-first)
   - [Before you start](#before-you-start)
   - [Part 1 — Give the app an email password](#part-1--give-the-app-an-email-password)
-  - [Part 2 — Save a search](#part-2--save-a-search)
-  - [Part 3 — Let your computer wake itself up](#part-3--let-your-computer-wake-itself-up)
+  - [Part 2 — Let your computer wake itself up](#part-2--let-your-computer-wake-itself-up)
+  - [Part 3 — Save a search](#part-3--save-a-search)
   - [What the emails look like](#what-the-emails-look-like)
   - [Where scheduled results live](#where-scheduled-results-live)
 - [**Keeping it up to date**](#keeping-it-up-to-date)
@@ -210,7 +210,7 @@ computer normally otherwise, including your own separate browser — just leave
 that one window alone.
 
 **Keep your computer turned on.** The app tries to keep your computer awake while it
-works, and it will continue running even if the display turns off to save power. However, closing your laptop lid will put it to sleep, unless there are external displays connected. Keep your computer plugged in with the lid open so that the search doesn't get interrupted.
+works, and it will continue running even if the display turns off to save power. However, closing your laptop lid will put it to sleep, unless there's an external display connected. Keep your computer plugged in with the lid open so that the search doesn't get interrupted.
 
 **You can stop it early.** Press `Control-C` in the terminal to end the search at any time, and it will build the gallery with everything it gathered so far. Closing the automated browser window does the same thing, but `Control-C` allows it to wrap up more cleanly.
 
@@ -243,34 +243,68 @@ close and reopen the page.
 
 ## Automated searches
 
-You can save a search and have the app run it automatically on a fixed interval, to find new listings, or listings that didn't turn up on the first pass. Each time it runs, it will email you a report of what it found.
-
-Each report tells you what's new, what's still there, and what sold or was taken
-down since last time.
+You can save a search and have the app run it automatically on a fixed interval. This allows you to easily find new listings, including listings that didn't turn up on the first pass. Each time it runs, it will email you a report of what it found.
 
 You need an email account the app can send from. These instructions describe how
-to set it up with Gmail, but Outlook, iCloud, etc. all work too. See [using
-something other than Gmail](#using-something-other-than-gmail).
+to set it up with Gmail, but Outlook, iCloud, etc. should all work too.
 
-### On a Mac, check where this folder lives first
+### Mac users: check the folder location
 
-macOS refuses background tasks access to your **Documents**, **Desktop** and
-**Downloads** folders. Searches you start yourself are unaffected, but a
-scheduled one can't read anything it needs from those three places, so it will
-never run.
+macOS guards your **Documents**, **Desktop** and **Downloads** folders, and won't
+let anything running in the background read what's inside them.
 
-The fix takes ten seconds: quit the app, open Finder, press **Command-Shift-H**
-to go to your home folder, and drag the Faceplace Marketbook folder there. Then
-start it again from its new home.
+**Searches you start yourself are unaffected, which is why this is easy to miss.**
+When you run one, macOS asks you once — *"Terminal would like to access files in
+your Downloads folder"* — and clicking **Allow** settles it for good. A scheduled
+search has nobody sitting there to ask, so macOS silently refuses it every file it
+needs instead, and it never runs.
 
-If you'd rather leave the folder where it is, the app will tell you exactly what
-to do instead when you turn automatic runs on in Part 3. Windows has no such
-restriction.
+So if the app's folder is inside one of those three, you need to do one of the
+following two things. The app checks for this when you turn automatic runs on, and
+says so if it's a problem.
+
+**Option 1 — move the folder somewhere macOS doesn't guard.** This needs no
+password and nothing to configure.
+
+1. Quit the app.
+2. Open Finder and press **Command-Shift-H** to go to your home folder.
+3. Drag the Faceplace Marketbook folder there.
+4. Start the app again from its new home, and turn automatic runs on.
+
+If you made desktop or Dock shortcuts, re-create them from the **Email & Setup**
+tab — a shortcut points at wherever the folder used to be, so moving it leaves the
+old ones pointing at nothing.
+
+**Option 2 — leave the folder where it is, and grant Full Disk Access.** This is
+the same permission you'd give a backup program. It goes to the app's copy of
+Python rather than to the app itself, because Python is the thing macOS actually
+starts on a schedule.
+
+1. In the app, open the **Email & Setup** tab and click **Turn on**. If the folder
+   is the problem, the message that appears includes a path ending in
+   `.venv/bin/python3`. Leave the window open, and copy that path.
+2. Open **System Settings → Privacy & Security → Full Disk Access**.
+3. Click the **+** button, and enter your password if you're asked for it.
+4. In the file picker, press **Command-Shift-G**, paste the path, press Return,
+   then click **Open**.
+5. Make sure the switch beside the new entry is on.
+6. Back in the app, click **Turn off** and then **Turn on** again. This confirms
+   it worked straight away, rather than leaving the tab reporting a problem until
+   the scheduler's next check fifteen minutes later.
+
+**This permission belongs to that exact folder.** The path you granted includes
+the app's location, so moving the folder, or downloading a fresh copy somewhere
+else, means doing it again for the new one. The old entry is then dead and can be
+removed from the list with the **−** button.
 
 ### Before you start
 
 You need two things: an app password for your email account, and permission for
-your computer to wake itself up. Both are one-time setup. Do them in this order.
+your computer to wake itself up. Both are one-time setup, and both have to be
+done before you can save a scheduled search — one gives it somewhere to send its
+report, the other is the thing that starts it. Until they're both in place, the
+**Scheduled search** box at the bottom of the New Search tab stays greyed out and
+says which one is missing. Do them in this order.
 
 ### Part 1 — Give the app an email password
 
@@ -315,7 +349,29 @@ You don't need a Gmail account. Pick your provider from the **Provider** menu:
 - **Other** lets you type in any mail server's address and port, which is the
   route for a work account or your own domain.
 
-### Part 2 — Save a search
+### Part 2 — Let your computer wake itself up
+
+A scheduled search can't run if the computer is asleep and stays asleep. This
+part gives it permission to wake up, do the run, and go back to sleep.
+
+1. In the app, go to the **Email & Setup** tab.
+2. Under **Automatic runs**, click **Turn on**. It takes a few seconds, because
+   the app then checks that the schedule it just set up can actually reach your
+   files.
+3. On a Mac, there will be a prompt asking for your password. This is macOS
+   asking, not the app — waking a sleeping Mac on a schedule needs administrator
+   rights. One password covers everything: the daily 5am wake-up, and the
+   scheduled wake-ups for any searches that run more often than daily.
+4. Read the message that appears. It tells you if anything is left to do by
+   hand.
+5. Scroll down the same tab to **Computer settings**, and work through what it
+   says there. These are settings on the computer itself rather than in the app
+   — the ones that decide whether it's awake and willing to run a search when
+   one comes due. It shows the settings for the computer you're on and no
+   other, with the click path for each one, and marks which are worth doing and
+   which are merely optional.
+
+### Part 3 — Save a search
 
 1. Click the **New search** tab.
 2. Set up your search exactly as you would for a normal run: query, cities,
@@ -327,8 +383,22 @@ You don't need a Gmail account. Pick your provider from the **Provider** menu:
 6. Choose how often the search will run.
 7. Click **Save scheduled search**.
 
-**Daily searches run every morning.** Searches set in hours run every so many
-hours from when the last one started.
+**Daily searches run every morning at 5am.** Searches set in hours run at fixed
+times of day, starting from 5am — every 6 hours means 5am, 11am, 5pm and 11pm,
+the same times every day, and the app shows you the exact times as you choose.
+The choices are limited to every 3, 4, 6, 8 or 12 hours so the times come out
+the same every day. The first run is the next of those times to come around;
+use **Run now** on the Scheduled searches tab if you don't want to wait.
+
+**On a Mac, hourly searches come with wake-ups that need renewing.** A Mac can
+only be told its wake-up times a few weeks ahead, so the app schedules them 21
+days out and counts down from there. Renewal is nothing to remember: saving or
+changing an hourly search tops the wake-ups up, and once they're down to their
+last week, the app offers to renew them whenever you open it — one click and
+your password. If they do run out, nothing breaks: hourly searches keep running
+once a day at 5am, and whenever the Mac happens to be awake, and your report
+emails will remind you before that happens. Windows needs none of this — the
+scheduled task wakes the machine by itself.
 
 > **Don't set up too many, and don't run them too often.** Every run is a full
 > sweep of every city you picked, and a lot of automated traffic is what gets
@@ -342,62 +412,6 @@ run one immediately, edit it, pause it, or delete it.
 running, and you can resume it later. Deleting removes the schedule and the
 saved settings; the results folder, the gallery, the photos and everything the
 search ever found stay exactly where they are on your computer.
-
-### Part 3 — Let your computer wake itself up
-
-A scheduled search can't run if the computer is asleep and stays asleep. This
-part gives it permission to wake up, do the run, and go back to sleep.
-
-1. In the app, go to the **Email & Setup** tab.
-2. Click **Turn automatic runs on**. It takes a few seconds, because the app
-   then checks that the schedule it just set up can actually reach your files.
-3. On a Mac, there will be a prompt asking for your password. This is macOS
-   asking, not the app — waking a sleeping Mac on a schedule needs administrator
-   rights.
-4. Read the message that appears. It tells you if anything is left to do by
-   hand.
-
-Then there are a few system settings you might want to change.
-
-<details>
-<summary><strong>On a Mac</strong></summary>
-
-Open **System Settings**, click **Battery**, then **Options…** at the bottom.
-
-- **Wake for network access → Always.** This is what lets a sleeping Mac wake up
-  for its scheduled run. On *Only on Power Adapter* — the usual default — a
-  scheduled run on battery is skipped and happens the next time the machine is
-  awake instead, and the report tells you it ran late.
-- **Low Power Mode → Never**, or **Only on Battery** if you want it to work
-  while unplugged. Keep in mind that automated searches will use up some battery
-  life.
-
-**Closing the lid.** With the lid shut, a Mac laptop goes into a deeper sleep,
-unless it's connected to an external monitor or display. This makes scheduled
-wake-ups unreliable. If you want overnight runs, leave the lid open and let the
-screen turn itself off.
-
-</details>
-<details>
-<summary><strong>On Windows</strong></summary>
-
-**Allow wake timers** Press the Windows key, type **Control Panel**, and open
-it. Then go to **Hardware and Sound → Power Options → Change plan settings →
-Change advanced power settings**. In the list that appears, expand **Sleep**,
-then **Allow wake timers**, set **both** *On battery* and *Plugged in* to
-**Enable**, and click **OK**.
-
-The rest are optional:
-
-- **Battery saver**: If it's set to switch on automatically at a high
-  percentage, a run scheduled while it's active may be delayed.
-- **Closing the lid.** In **Control Panel → Hardware and Sound → Power Options →
-  Choose what closing the lid does**, **Sleep** and **Do nothing** both let runs
-  happen. **Hibernate** and **Shut down** don't — both stop scheduled runs until
-  you turn the computer back on yourself.
-
-</details>
-<br>
 
 ### What the emails look like
 
@@ -490,8 +504,12 @@ on a very long run. Running the search again picks them up.
    green. An orange dot and **on, but blocked** means the schedule exists but
    can't reach your files; the instructions underneath say what to do.
 3. Was the computer asleep with the lid shut, hibernating, or switched off? Go
-   back through [Part 3](#part-3--let-your-computer-wake-itself-up).
-4. If a run started but nothing arrived, the email settings are the likely
+   back through [Part 2](#part-2--let-your-computer-wake-itself-up).
+4. On a Mac, if it's a search on an hour interval: have the wake-ups run out?
+   Check under *Automatic runs* on the *Email & Setup* tab — the app offers a
+   **Renew wake-ups** button there, and a notice at the top of the window when
+   they're getting low.
+5. If a run started but nothing arrived, the email settings are the likely
    cause. Click **Send a test email**.
 
 **My desktop icon says it can't find the folder, or does nothing.** It holds the

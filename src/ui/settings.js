@@ -4,16 +4,23 @@ const PACES = __PACES__;
 const DEFAULTS = __DEFAULTS__;
 const SAVED = __SAVED__;
 const EMAIL = __EMAIL__;
+const SCHEDULE = __SCHEDULE__;
 const UNITS = __UNITS__;
 const SHORTCUT = __SHORTCUT__;
 // The shortcut offer sits over everything, so while it's up it owns the
 // keyboard. Declared here because the key handlers below consult it.
 let shortcutOpen = false;
-// Whether this computer can send mail yet. A scheduled search that can't email is
-// a search whose results nobody ever sees, so this decides whether the save
-// block on the search tab is usable at all. Declared up here because refresh()
-// consults it on every keystroke.
+// The two things a scheduled search needs before it is worth saving one, both
+// answered before the window opens so the block that says so is right on arrival
+// rather than after the first refusal. Declared up here because refresh()
+// consults them on every keystroke.
+//
+// Without email it would run on time, find things, and tell nobody. Without
+// automatic runs nothing would start it at all. Either way what gets saved looks
+// scheduled and isn't, which is the one outcome worth barring outright.
 let emailReady = !!EMAIL.ready;
+let schedReady = !!SCHEDULE.ready;
+const canSchedule = () => emailReady && schedReady;
 // Fixed per-listing costs no pace setting can remove: loading the page and
 // reading its payload, plus saving the photo when thumbnails are on.
 const PAGE_WORK = DEFAULTS.page_work || 3.5;
@@ -304,7 +311,7 @@ function refresh() {
     .concat(warns.map(w => `<span class="warn">${w}</span>`))
     .join(' &middot; ');
   $('start').disabled = warns.length > 0;
-  $('saveSearch').disabled = problems.length > 0 || !emailReady;
+  $('saveSearch').disabled = problems.length > 0 || !canSchedule();
   $('addQuery').disabled = queryBoxes().length >= MAX_QUERIES;
 }
 
@@ -382,12 +389,59 @@ UNITS.forEach(u => {
 });
 $('save_unit').value = UNITS.includes('days') ? 'days' : UNITS[0];
 
+// Hours are a fixed menu, not a free number: an hourly search runs at set times
+// of day (anchored at DAILY_HOUR) so the Mac can be given its wake-ups weeks in
+// advance, and only counts that divide 24 land on the same times every day.
+const HOUR_CHOICES = SCHEDULE.hour_choices || [3, 4, 6, 8, 12];
+const DAILY_HOUR = SCHEDULE.daily_hour || 5;
+HOUR_CHOICES.forEach(n => {
+  const o = document.createElement('option');
+  o.value = String(n);
+  o.textContent = String(n);
+  $('save_every_hours').appendChild(o);
+});
+
+const hour12 = h => h === 0 ? '12 am' : h < 12 ? `${h} am`
+  : h === 12 ? '12 pm' : `${h - 12} pm`;
+
+// The times of day an every-N-hours search runs at, spelled out so "every 6
+// hours" is never a guess about where the sixes fall.
+function gridTimes(every) {
+  const out = [];
+  for (let k = 0; k < Math.ceil(24 / every); k++)
+    out.push((DAILY_HOUR + k * every) % 24);
+  return out.sort((a, b) => a - b).map(hour12);
+}
+
+// One box holds the count, but it's two controls: a free number for days (and
+// dev-mode minutes), a menu for hours. Whichever is hidden is dead weight, so
+// the value always comes from the visible one.
+function everyValue() {
+  return $('save_unit').value === 'hours'
+    ? Number($('save_every_hours').value) || HOUR_CHOICES[0]
+    : Number($('save_every').value) || 1;
+}
+
+function swapEveryBox() {
+  const hours = $('save_unit').value === 'hours';
+  $('save_every').hidden = hours;
+  $('save_every_hours').hidden = !hours;
+  const hint = $('everyHint');
+  hint.hidden = !hours;
+  if (hours) {
+    const times = gridTimes(everyValue());
+    hint.textContent = 'Runs at the same times every day: '
+      + times.slice(0, -1).join(', ')
+      + (times.length > 1 ? ' and ' + times[times.length - 1] : times[0]) + '.';
+  }
+}
+
 // The number and the unit beside it are read as one phrase, so "every 1 days"
 // has to become "every 1 day". Only the labels change; the values the scheduler
 // is given are always the plural ones it stores. Lower case, because the CSS
 // puts the chosen one in capitals and leaves the open list as written.
 function labelUnits() {
-  const one = Number($('save_every').value) === 1;
+  const one = everyValue() === 1;
   [...$('save_unit').options].forEach(o => {
     o.textContent = one ? o.value.replace(/s$/, '') : o.value;
   });
@@ -410,7 +464,10 @@ function fixEvery(final) {
 $('save_every').addEventListener('input', () => fixEvery());
 $('save_every').addEventListener('change', labelUnits);
 $('save_every').addEventListener('blur', () => { fixEvery(true); labelUnits(); });
+$('save_every_hours').addEventListener('change', swapEveryBox);
+$('save_unit').addEventListener('change', () => { swapEveryBox(); labelUnits(); });
 labelUnits();
+swapEveryBox();
 
 let editingId = null;
 
@@ -418,8 +475,7 @@ function scheduleFields() {
   return {
     name: $('save_name').value.trim(),
     email_to: $('save_email').value.trim(),
-    interval: {every: Number($('save_every').value) || 1,
-               unit: $('save_unit').value},
+    interval: {every: everyValue(), unit: $('save_unit').value},
   };
 }
 
@@ -427,7 +483,7 @@ async function checkWarnings() {
   const res = await window.pyCheckSchedule({...scheduleFields(), id: editingId});
   say('saveWarn', (res.warnings || []).join(' '), 'bad');
 }
-['save_every', 'save_unit'].forEach(id =>
+['save_every', 'save_every_hours', 'save_unit'].forEach(id =>
   $(id).addEventListener('change', checkWarnings));
 
 $('saveSearch').onclick = async () => {
@@ -437,9 +493,11 @@ $('saveSearch').onclick = async () => {
   const payload = {...collect(), ...scheduleFields(), id: editingId};
   const res = await window.pySaveSearch(payload);
   btn.disabled = false;
-  // Email can have been taken away since this window opened, in which case the
-  // refusal is also the news that this block should have been shut.
+  // Either one can have been taken away since this window opened — email
+  // cleared, automatic runs switched off — in which case the refusal is also the
+  // news that this block should have been shut.
   if (res.email_ready === false) setEmailReady(false);
+  if (res.schedule_ready === false) { schedReady = false; refreshScheduleGate(); }
   if (res.error) { say('saveMsg', res.error, 'bad'); return; }
   say('saveWarn', (res.warnings || []).join(' '), 'bad');
   say('saveMsg', res.message, 'ok');
@@ -468,8 +526,17 @@ function startEditing(s) {
   // A search saved before this box existed has no address of its own and has
   // been reporting to the account's own address, so that's what it shows.
   $('save_email').value = s.email_to || reportsTo();
-  $('save_every').value = (s.interval && s.interval.every) || 1;
+  const every = (s.interval && s.interval.every) || 1;
   $('save_unit').value = (s.interval && s.interval.unit) || 'days';
+  $('save_every').value = every;
+  // A count the menu doesn't offer (hand-edited json, or saved before hours
+  // became a menu) falls back to the first choice rather than leaving the
+  // menu with nothing selected.
+  if ($('save_unit').value === 'hours') {
+    $('save_every_hours').value =
+      HOUR_CHOICES.includes(every) ? String(every) : String(HOUR_CHOICES[0]);
+  }
+  swapEveryBox();
   labelUnits();
   const keep = new Set(s.cities || []);
   cityWrap.querySelectorAll('.tog').forEach(t =>
@@ -493,9 +560,12 @@ $('cancelEdit').onclick = () => { stopEditing(); say('saveMsg', ''); };
 function renderSaved() {
   const wrap = $('savedList');
   if (!SAVED.length) {
+    // The box above already says what's missing when something is, so this only
+    // has to point somewhere — and not at the New Search tab, where saving is
+    // still barred.
     wrap.innerHTML = '<div class="empty">No scheduled searches yet. '
-      + (emailReady ? 'Set one up at the bottom of the New Search tab.'
-                    : 'To create one, first set up your email on the Email & Setup tab.')
+      + (canSchedule() ? 'Set one up at the bottom of the New Search tab.'
+                       : 'Finish the setup on the Email & Setup tab to create one.')
       + '</div>';
     return;
   }
@@ -552,7 +622,10 @@ $('savedList').addEventListener('click', async e => {
     if (res.error) { say('savedMsg', res.error, 'bad'); return; }
     SAVED.length = 0; SAVED.push(...(res.searches || []));
     renderSaved();
-    say('savedMsg', `“${s.name}” is now ${s.enabled ? 'paused' : 'active'}.`, 'ok');
+    // Pausing or resuming an hourly search rewrites the Mac's wake-ups, and
+    // the note is how a declined password prompt gets reported.
+    say('savedMsg', `“${s.name}” is now ${s.enabled ? 'paused' : 'active'}.`
+        + (res.note ? ' ' + res.note : ''), 'ok');
     return;
   }
   if (act === 'del') {
@@ -570,8 +643,8 @@ $('savedList').addEventListener('click', async e => {
     SAVED.length = 0; SAVED.push(...(res.searches || []));
     if (editingId === id) stopEditing();
     renderSaved();
-    say('savedMsg', `Deleted “${s.name}”. Its results are still available in the Past Searches tab.`,
-        'ok');
+    say('savedMsg', `Deleted “${s.name}”. Its results are still available in the Past Searches tab.`
+        + (res.note ? ' ' + res.note : ''), 'ok');
   }
 });
 
@@ -603,9 +676,42 @@ function fillReportTo() {
   if (!$('save_email').value.trim()) $('save_email').value = reportsTo();
 }
 
-// Everything that changes when email starts or stops working. Scheduled searches
-// are the only thing email is for, so the two tabs that offer them say plainly
-// which of the two states they're in rather than failing later.
+// Why a scheduled search can't be set up yet, or '' when it can. Both reasons
+// are named together when both apply: sending someone to fix one and then meeting
+// them with the other is how a two-step setup comes to feel like a fault.
+function scheduleBlock() {
+  if (canSchedule()) return '';
+  if (!emailReady && !schedReady) {
+    return 'Configure your email settings and turn on automatic runs to enable scheduled searches.';
+  }
+  if (!emailReady) {
+    return 'Configure your email settings to run a scheduled search.';
+  }
+  // Deliberately not "turned off": on and blocked lands here too, and the
+  // instructions for that are already on the tab this sends you to.
+  return 'Turn on automatic runs to set up a scheduled search.';
+}
+
+// Everywhere the answer shows: the block on the search tab, the one on the
+// scheduled searches tab, and whether the fields between them can be touched at
+// all. Called again whenever either half of the answer changes.
+function refreshScheduleGate() {
+  const why = scheduleBlock();
+  $('saveBlocked').hidden = !why;
+  $('saveBlockedWhy').textContent = why;
+  $('savedBlocked').hidden = !why;
+  $('savedBlockedWhy').textContent = why;
+  $('saveFields').classList.toggle('gated', !!why);
+  $('saveFields').querySelectorAll('input, select').forEach(el => {
+    el.disabled = !!why;
+  });
+  // The empty-list text names the same answer, so it moves with it.
+  if (tab === 'saved') renderSaved();
+  refresh();
+}
+
+// Everything that changes when email starts or stops working: the status line
+// here, and half of whether a scheduled search can be set up at all.
 function setEmailReady(ready) {
   emailReady = !!ready;
   // Where a report lands is each search's own business, so this says where one
@@ -615,29 +721,20 @@ function setEmailReady(ready) {
   $('mailState').textContent = emailReady
     ? `Email is set up${from ? ', sending from ' + from : ''}`
     : 'Email isn\'t set up yet';
-  $('saveNeedsEmail').hidden = emailReady;
-  $('savedNeedsEmail').hidden = emailReady;
-  $('saveFields').classList.toggle('gated', !emailReady);
-  $('saveFields').querySelectorAll('input, select').forEach(el => {
-    el.disabled = !emailReady;
-  });
   fillReportTo();
-  refresh();
+  refreshScheduleGate();
 }
 
-// The way back, for someone the save block sent over here.
-let cameForSave = false;
 $('goEmail').onclick = () => {
-  cameForSave = true;
   showTab('email');
-  $('mail_address').focus();
-};
-$('backToSave').onclick = () => {
-  cameForSave = false;
-  $('backToSave').hidden = true;
-  showTab('new');
-  $('save_name').focus();
-  $('save_name').scrollIntoView({block: 'center'});
+  // Whichever of the two is missing is the one worth landing on. Both missing
+  // starts at email, which is the one that takes typing.
+  if (!emailReady) {
+    $('mail_address').focus();
+  } else {
+    $('schedOn').focus();
+    $('schedOn').scrollIntoView({block: 'center'});
+  }
 };
 
 $('saveMail').onclick = async () => {
@@ -652,9 +749,6 @@ $('saveMail').onclick = async () => {
   // that was written reports what it left behind.
   if (res.ready !== undefined) setEmailReady(res.ready);
   say('mailMsg', res.error || res.message, res.error ? 'bad' : 'ok');
-  // Only offered to someone who came here to unblock a save: sending them back
-  // to a tab they were already on would be nonsense.
-  $('backToSave').hidden = !(emailReady && cameForSave);
 };
 
 $('testMail').onclick = async () => {
@@ -682,7 +776,26 @@ async function loadSchedState() {
   showProblems(res.problems);
   $('schedOn').hidden = res.installed;
   $('schedOff').hidden = !res.installed;
+  // Turning these on or off is the other half of what decides whether a
+  // scheduled search can be set up, so the blocks that say so move with it.
+  schedReady = !!res.ready;
+  showWakes(res.wakes);
+  showSystemSettings(res.os);
+  refreshScheduleGate();
 }
+
+// The system settings for this computer, and nothing about the other one:
+// its menus don't exist here, and a page that lists both leaves you working
+// out which half to ignore. Anywhere that isn't macOS or Windows has no
+// automatic runs to make possible, so the section stays away entirely.
+const OS_NAMES = {darwin: 'macOS', windows: 'Windows'};
+function showSystemSettings(os) {
+  $('sysMac').hidden = os !== 'darwin';
+  $('sysWin').hidden = os !== 'windows';
+  $('sysBlock').hidden = !OS_NAMES[os];
+  $('sysOs').textContent = OS_NAMES[os] || '';
+}
+showSystemSettings(SCHEDULE.os);
 
 // Paths in these messages have to be copyable, so they're set as text inside
 // <code> rather than pasted into innerHTML.
@@ -725,6 +838,65 @@ $('schedOff').onclick = async () => {
   await loadSchedState();
   say('schedMsg', (res.messages || []).join('\n\n'), 'ok');
 };
+
+// ---------------------------------------------------------- the wake queue
+// The one-off wake-ups that get a sleeping Mac up for hourly searches. They're
+// written weeks ahead and run down day by day, so the tab shows how far they
+// reach, and a Renew button rewrites them — that's the click that can ask for
+// the password. Irrelevant on Windows (the scheduled task wakes the machine
+// itself) and with no hourly searches, and invisible both times.
+function showWakes(wakes) {
+  const on = !!(wakes && wakes.relevant);
+  $('wakeRow').hidden = !on;
+  $('wakeHint').hidden = !on;
+  if (!on) return;
+  const low = !!wakes.renew;
+  const until = wakes.until ? new Date(wakes.until) : null;
+  $('wakeDot').className = 'dot' + (low ? ' stuck' : ' on');
+  $('wakeState').textContent = !wakes.queued
+    ? 'Wake-ups for scheduled searches have run out'
+    : `Wake-ups for scheduled searches are in effect until ${
+        until.toLocaleDateString(undefined,
+        {weekday: 'long', month: 'long', day: 'numeric'})}`
+      + (low ? ` — ${wakes.days_left} day${wakes.days_left === 1 ? '' : 's'} left` : '');
+  $('wakeHint').textContent = 'A Mac can only be given its wake-ups a few '
+    + 'weeks at a time, so they need renewing now and then. If they expire, '
+    + 'searches that are scheduled to run multiple times a day will still run '
+    + 'every day at ' + hour12(DAILY_HOUR) + ', and whenever the Mac is awake.';
+}
+
+async function renewWakes(msgId) {
+  const res = await window.pyRenewWakes();
+  say(msgId, res.error || res.message, res.error ? 'bad' : 'ok');
+  if (res.wakes) showWakes(res.wakes);
+  return !res.error;
+}
+$('renewWakes').onclick = () => renewWakes('wakeMsg');
+
+// The same fact raised at the front door when it's nearly urgent: below the
+// renew threshold the banner is the first thing the window shows, wherever it
+// opens. "Not now" costs nothing — the queue keeps counting down, the reports
+// start nagging near the end, and the banner returns next launch.
+function wakeBanner(wakes) {
+  if (!wakes || !wakes.relevant || !wakes.renew) return;
+  $('wakeText').textContent = 'You have a scheduled search that runs multiple '
+    + 'times a day, which requires periodic renewal so it can keep waking up '
+    + 'your computer on schedule. '
+    + (wakes.queued
+      ? `The current wake-ups run out in ${wakes.days_left} `
+        + `day${wakes.days_left === 1 ? '' : 's'}`
+      : 'They\'ve already run out')
+    + ' — renewing takes one click and your password.';
+  $('wakeBar').hidden = false;
+}
+$('wakeLater').onclick = () => { $('wakeBar').hidden = true; };
+$('wakeRenew').onclick = async () => {
+  if (await renewWakes('wakeBarMsg')) {
+    setTimeout(() => { $('wakeBar').hidden = true; }, 2500);
+  }
+};
+showWakes(SCHEDULE.wakes);
+wakeBanner(SCHEDULE.wakes);
 
 // ------------------------------------------------------------ past searches
 // What's in runs/, as one card per finished search. Fetched the first time the

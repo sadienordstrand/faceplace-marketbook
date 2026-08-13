@@ -59,11 +59,21 @@ class Redirected(unittest.TestCase):
         self.logged = []
         self._real_log = sc.log
         sc.log = self.logged.append
+        # The wake queue must never reach the real system from a test: writing
+        # it can raise a macOS password prompt, and reading it answers with
+        # whatever this machine happens to have scheduled. Tests that care
+        # replace these with their own recorders.
+        self._wakes = {"scheduled_wakes": sc.scheduled_wakes,
+                       "_admin_shell": sc._admin_shell}
+        sc.scheduled_wakes = lambda: []
+        sc._admin_shell = lambda lines: True
         self.addCleanup(self._restore)
         self.addCleanup(self.tmp.cleanup)
 
     def _restore(self):
         sc.log = self._real_log
+        for k, v in self._wakes.items():
+            setattr(sc, k, v)
         for k, v in self._saved.items():
             setattr(sc, k, v)
 
@@ -120,30 +130,53 @@ class TestIntervalMath(unittest.TestCase):
             with self.subTest(last=last):
                 self.assertEqual(self.daily(last).hour, 5)
 
-    def test_hours_are_measured_from_the_start(self):
+    # Hour intervals run on a fixed daily grid anchored at 5am, so the Mac's
+    # wake-ups can be written weeks ahead: the times never move, only the count
+    # of days they're queued for.
+    def test_the_grid_starts_at_5am_and_repeats_daily(self):
+        self.assertEqual(sc.grid_hours(6), [5, 11, 17, 23])
+        self.assertEqual(sc.grid_hours(12), [5, 17])
+        self.assertEqual(sc.grid_hours(8), [5, 13, 21])
+        self.assertEqual(sc.grid_hours(3), [2, 5, 8, 11, 14, 17, 20, 23])
+
+    def test_a_legacy_count_that_does_not_divide_24_still_gets_a_grid(self):
+        # Saved before hours became a menu. The times still repeat daily; the
+        # wrap past midnight back to 5am is just one short gap.
+        self.assertEqual(sc.grid_hours(5), [1, 5, 10, 15, 20])
+
+    def test_hours_snap_to_the_grid_not_to_the_last_start(self):
+        # A run that started at 11:00:04 measures from its start, and the next
+        # slot is 5pm — the same 5pm as every other day, not 5:00:04.
         s = {"interval": {"every": 6, "unit": "hours"},
-             "last_started": "2026-08-06T06:00:00"}
-        self.assertEqual(sc.next_run_at(s, after=dt("2026-08-06T07:00:00")),
-                         dt("2026-08-06T12:00:00"))
+             "last_started": "2026-08-06T11:00:04"}
+        self.assertEqual(sc.next_run_at(s, after=dt("2026-08-06T11:45:00")),
+                         dt("2026-08-06T17:00:00"))
+
+    def test_first_hourly_run_waits_for_the_next_slot(self):
+        # Save at 4pm, every 6 hours: the first run is 5pm, because that's the
+        # next point on the 5am / 11am / 5pm / 11pm grid. Run now exists for
+        # anyone who doesn't want to wait.
+        s = {"interval": {"every": 6, "unit": "hours"}, "last_started": None}
+        self.assertEqual(sc.next_run_at(s, after=dt("2026-08-06T16:00:00")),
+                         dt("2026-08-06T17:00:00"))
+        s = {"interval": {"every": 12, "unit": "hours"}, "last_started": None}
+        self.assertEqual(sc.next_run_at(s, after=dt("2026-08-06T14:00:00")),
+                         dt("2026-08-06T17:00:00"))
+
+    def test_a_machine_that_slept_catches_up_once_not_five_times(self):
+        # Every 3 hours, last started at 5am, woken at 2:30pm: the slots it
+        # slept through are gone. The catch-up run happens when the tick finds
+        # next_run in the past; measured from that start, the schedule is back
+        # on the grid.
+        s = {"interval": {"every": 3, "unit": "hours"},
+             "last_started": "2026-08-06T14:30:00"}
+        self.assertEqual(sc.next_run_at(s), dt("2026-08-06T17:00:00"))
 
     def test_minutes_unit_exists_for_testing(self):
         s = {"interval": {"every": 5, "unit": "minutes"},
              "last_started": "2026-08-06T06:00:00"}
         self.assertEqual(sc.next_run_at(s, after=dt("2026-08-06T06:01:00")),
                          dt("2026-08-06T06:05:00"))
-
-    def test_a_run_longer_than_its_interval_skips_missed_fires(self):
-        # Hourly search, last start 5 hours ago: catch up once, don't queue five.
-        s = {"interval": {"every": 1, "unit": "hours"},
-             "last_started": "2026-08-06T06:00:00"}
-        nxt = sc.next_run_at(s, after=dt("2026-08-06T11:30:00"))
-        self.assertGreater(nxt, dt("2026-08-06T10:30:00"))
-        self.assertLessEqual(nxt, dt("2026-08-06T11:30:00"))
-
-    def test_first_hourly_run_is_immediate(self):
-        s = {"interval": {"every": 4, "unit": "hours"}, "last_started": None}
-        self.assertEqual(sc.next_run_at(s, after=dt("2026-08-06T09:00:00")),
-                         dt("2026-08-06T09:00:00"))
 
     def test_interval_hours_and_description(self):
         self.assertEqual(sc.interval_hours({"every": 2, "unit": "days"}), 48)
@@ -266,7 +299,8 @@ class TestSavedSearchCRUD(Redirected):
                         "last_started": "2026-08-06T06:00:00"})
         self.assertIsNone(err)
         self.assertEqual(updated["id"], rec["id"])
-        self.assertEqual(sc.parse_iso(updated["next_run"]).hour % 6, 0)
+        # Switching to hours puts the next run on the 5am-anchored grid.
+        self.assertIn(sc.parse_iso(updated["next_run"]).hour, sc.grid_hours(6))
 
     def test_editing_can_keep_its_own_name(self):
         rec = self.make()
@@ -1287,10 +1321,14 @@ class TestSavingNeedsEmail(Redirected):
 
     def setUp(self):
         super().setUp()
-        # Never let a test reach launchd or Task Scheduler.
+        # Never let a test reach launchd or Task Scheduler. Automatic runs are on
+        # and working here, so email is the only thing these tests are about.
         self._installed = sc.schedule_installed
-        sc.schedule_installed = lambda: False
+        sc.schedule_installed = lambda: True
         self.addCleanup(lambda: setattr(sc, "schedule_installed", self._installed))
+        self._problems = sc.schedule_problems
+        sc.schedule_problems = lambda: []
+        self.addCleanup(lambda: setattr(sc, "schedule_problems", self._problems))
 
     def test_saving_is_refused_while_there_is_no_email(self):
         res = sc.ui_hooks()["save_search"](dict(self.FORM))
@@ -1327,6 +1365,324 @@ class TestSavingNeedsEmail(Redirected):
         self.assertIs(res["ready"], False)
         res = sc.ui_hooks()["save_email"](dict(self.ACCOUNT))
         self.assertIs(res["ready"], True)
+
+
+# ------------------------------------ automatic runs as a step, not an afterthought
+class TestSavingNeedsAutomaticRuns(Redirected):
+    """The other half of the same problem. A search saved with nothing to start it
+    is as silent as one with nowhere to report to, and looks just as scheduled in
+    the list, so it's refused the same way."""
+
+    FORM = dict(TestSavingNeedsEmail.FORM)
+
+    def setUp(self):
+        super().setUp()
+        sc.save_email_config(dict(TestSavingNeedsEmail.ACCOUNT))
+        for name in ("schedule_installed", "schedule_problems", "os_name"):
+            self.addCleanup(setattr, sc, name, getattr(sc, name))
+        sc.os_name = lambda: "darwin"
+        self.stub(installed=True, problems=[])
+
+    def stub(self, installed, problems):
+        sc.schedule_installed = lambda: installed
+        sc.schedule_problems = lambda: problems
+
+    def save(self, **extra):
+        return sc.ui_hooks()["save_search"]({**self.FORM, **extra})
+
+    def test_saving_is_refused_while_automatic_runs_are_off(self):
+        self.stub(installed=False, problems=[])
+        res = self.save()
+        self.assertIn("Turn automatic runs on", res["error"])
+        self.assertIs(res["schedule_ready"], False)
+        self.assertFalse(sc.SEARCHES_PATH.exists())
+
+    def test_runs_that_are_on_but_blocked_are_refused_too(self):
+        # Installed and blocked reads as "on" everywhere else, and runs nothing.
+        self.stub(installed=True, problems=["The scheduler stopped checking in."])
+        self.assertIn("Turn automatic runs on", self.save()["error"])
+        self.assertFalse(sc.SEARCHES_PATH.exists())
+
+    def test_saving_goes_through_once_they_are_on_and_working(self):
+        res = self.save()
+        self.assertNotIn("error", res)
+        self.assertEqual([s["name"] for s in sc.load_searches()], ["Defender 110"])
+        # And says nothing about turning them on, which is the state it's in.
+        self.assertNotIn("automatic runs", res["message"])
+
+    def test_editing_one_is_refused_after_the_runs_are_turned_off(self):
+        saved = self.save()["searches"][0]
+        self.stub(installed=False, problems=[])
+        res = self.save(id=saved["id"], name="Something else")
+        self.assertIn("error", res)
+        self.assertEqual([s["name"] for s in sc.load_searches()], ["Defender 110"])
+
+    def test_the_window_is_told_before_it_opens(self):
+        # The block belongs on screen when the window appears, not after the
+        # first refusal, so the state it reads has the answer in it.
+        self.assertIs(sc.ui_hooks()["schedule_state"]()["ready"], True)
+        self.stub(installed=True, problems=["Pointing somewhere else."])
+        self.assertIs(sc.ui_hooks()["schedule_state"]()["ready"], False)
+
+    def test_a_system_with_no_schedule_to_install_is_not_held_to_this(self):
+        # There's nothing to turn on outside macOS and Windows, so insisting would
+        # bar every saved search on those systems. They run by hand instead, and
+        # saving says so.
+        sc.os_name = lambda: "other"
+        self.stub(installed=False, problems=[])
+        res = self.save()
+        self.assertNotIn("error", res)
+        self.assertIn("--run", res["message"])
+
+
+# ------------------------------------------------------------------ the wake queue
+class TestWakeQueue(Redirected):
+    """The one-off wake-ups that get a sleeping Mac up for hourly searches.
+    Written weeks ahead in a single authorized batch, run down day by day,
+    renewed from the settings window — and never allowed near the real pmset
+    from here: what would have run is recorded instead."""
+
+    def setUp(self):
+        super().setUp()
+        for name in ("os_name",):
+            self.addCleanup(setattr, sc, name, getattr(sc, name))
+        sc.os_name = lambda: "darwin"
+        self.on_machine = []            # what pmset -g sched would report
+        sc.scheduled_wakes = lambda: sorted(self.on_machine)
+        self.ran = []                   # each batch _admin_shell was handed
+        self.allow = True               # whether the password prompt "succeeds"
+
+        def admin(lines):
+            if not self.allow:
+                return False
+            self.ran.append(list(lines))
+            return True
+        sc._admin_shell = admin
+
+    def hourly(self, every, name=None, **kw):
+        return self.make(name or f"Every {every} hours",
+                         interval={"every": every, "unit": "hours"}, **kw)
+
+    # ---- which hours the machine has to wake at
+    def test_the_hours_are_the_union_of_every_hourly_search(self):
+        self.hourly(12)                              # 5, 17
+        self.hourly(8)                               # 5, 13, 21
+        self.assertEqual(sc.wake_hours_needed(), [13, 17, 21])
+
+    def test_5am_is_left_out_because_the_daily_repeat_covers_it(self):
+        self.hourly(12)
+        self.assertNotIn(5, sc.wake_hours_needed())
+
+    def test_paused_and_daily_searches_ask_for_no_wakes(self):
+        self.hourly(6, enabled=False)
+        self.make("Daily", interval={"every": 1, "unit": "days"})
+        self.assertEqual(sc.wake_hours_needed(), [])
+
+    def test_the_queue_reaches_the_horizon_and_only_holds_the_future(self):
+        self.hourly(12)                              # one wake a day, 5pm
+        now = dt("2026-08-06T18:00:00")              # today's 5pm already gone
+        times = sc.wake_times_needed(now=now)
+        self.assertEqual(times[0], dt("2026-08-07T17:00:00"))
+        self.assertTrue(all(t > now for t in times))
+        self.assertEqual(len(times), sc.WAKE_HORIZON_DAYS)
+
+    def test_a_dense_grid_is_capped_not_written_in_full(self):
+        self.hourly(3)
+        self.assertLessEqual(len(sc.wake_times_needed()), sc.WAKE_MAX_EVENTS)
+
+    # ---- reading what's on the machine
+    def test_only_events_wearing_our_name_are_ours(self):
+        real_run, sc.scheduled_wakes = sc.scheduled_wakes, self._wakes["scheduled_wakes"]
+        try:
+            self.addCleanup(setattr, sc, "_run", sc._run)
+            report = (
+                "Scheduled power events:\n"
+                " [0]  wake at 08/10/2026 05:53:23 by 'com.apple.alarm'\n"
+                " [1]  wake at 08/10/2026 17:00:00 by 'Faceplace Marketbook'\n"
+                " [2]  wake at 08/11/2026 17:00:00 by 'Faceplace Marketbook'\n")
+            sc._run = lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0,
+                                                                    report, "")
+            self.assertEqual(sc.scheduled_wakes(),
+                             [dt("2026-08-10T17:00:00"),
+                              dt("2026-08-11T17:00:00")])
+        finally:
+            sc.scheduled_wakes = real_run
+
+    # ---- the state the window and the reports read
+    def test_the_queue_means_nothing_without_hourly_searches(self):
+        self.make("Daily", interval={"every": 1, "unit": "days"})
+        self.assertIs(sc.wake_queue_state()["relevant"], False)
+
+    def test_a_full_queue_is_neither_renewable_nor_naggable(self):
+        self.hourly(12)
+        now = dt("2026-08-06T12:00:00")
+        self.on_machine = [now + timedelta(days=d, hours=5)
+                           for d in range(1, sc.WAKE_HORIZON_DAYS + 1)]
+        state = sc.wake_queue_state(now=now)
+        self.assertEqual(state["days_left"], sc.WAKE_HORIZON_DAYS)
+        self.assertIs(state["renew"], False)
+        self.assertIs(state["nag"], False)
+
+    def test_day_14_of_21_is_when_renewal_is_offered(self):
+        # The user's numbers: 21 days deep, offer at 14 days in (7 left), nag
+        # from day 18 (3 left).
+        self.hourly(12)
+        now = dt("2026-08-06T12:00:00")
+        for left, renew, nag in ((8, False, False), (6, True, False),
+                                 (5, True, False), (3, True, True),
+                                 (0, True, True)):
+            with self.subTest(days_left=left):
+                self.on_machine = [now + timedelta(days=d, hours=1)
+                                   for d in range(left)]
+                state = sc.wake_queue_state(now=now)
+                self.assertIs(state["renew"], renew)
+                self.assertIs(state["nag"], nag)
+
+    # ---- rewriting the queue
+    def test_a_renewal_cancels_ours_and_writes_the_fresh_set(self):
+        self.hourly(12)
+        now = dt("2026-08-06T12:00:00")
+        self.on_machine = [dt("2026-08-07T17:00:00")]
+        changed, note = sc.renew_wakes(now=now, force=True)
+        self.assertTrue(changed)
+        lines = self.ran[-1]
+        self.assertIn("pmset schedule cancel wake '08/07/26 17:00:00' "
+                      "'Faceplace Marketbook' || true", lines)
+        adds = [l for l in lines if not l.startswith("pmset schedule cancel")]
+        self.assertEqual(adds[0], "pmset schedule wake '08/06/26 17:00:00' "
+                                  "'Faceplace Marketbook'")
+        self.assertEqual(len(adds), sc.WAKE_HORIZON_DAYS + 1)
+
+    def test_a_queue_still_deep_enough_is_left_alone(self):
+        # No pointless password prompts: same hours, more days left than the
+        # renewal threshold, nothing to do.
+        self.hourly(12)
+        now = dt("2026-08-06T12:00:00")
+        self.on_machine = [now + timedelta(days=d, hours=5)
+                           for d in range(1, 10)]
+        changed, note = sc.renew_wakes(now=now)
+        self.assertFalse(changed)
+        self.assertEqual(self.ran, [])
+
+    def test_changing_the_hours_rewrites_even_a_deep_queue(self):
+        self.hourly(12)                              # needs 17
+        now = dt("2026-08-06T12:00:00")
+        self.on_machine = [now.replace(hour=23) + timedelta(days=d)
+                           for d in range(10)]       # holds 23 — stale
+        changed, _ = sc.renew_wakes(now=now)
+        self.assertTrue(changed)
+
+    def test_the_last_hourly_search_gone_means_cleanup_only(self):
+        self.make("Daily", interval={"every": 1, "unit": "days"})
+        now = dt("2026-08-06T12:00:00")
+        self.on_machine = [dt("2026-08-07T17:00:00")]
+        changed, note = sc.renew_wakes(now=now)
+        self.assertTrue(changed)
+        self.assertIsNone(note)
+        self.assertTrue(all(l.startswith("pmset schedule cancel")
+                            for l in self.ran[-1]))
+
+    def test_a_declined_password_prompt_says_what_still_works(self):
+        self.hourly(12)
+        self.allow = False
+        changed, note = sc.renew_wakes()
+        self.assertFalse(changed)
+        self.assertIn("password", note)
+        self.assertIn("5am", note)
+
+    # ---- the moments that rewrite it
+    def test_saving_an_hourly_search_renews_the_queue_and_says_so(self):
+        sc.save_email_config(dict(TestSavingNeedsEmail.ACCOUNT))
+        for name in ("schedule_installed", "schedule_problems"):
+            self.addCleanup(setattr, sc, name, getattr(sc, name))
+        sc.schedule_installed = lambda: True
+        sc.schedule_problems = lambda: []
+        written = []
+
+        def admin(lines):
+            written.append(list(lines))
+            self.on_machine = sorted(
+                datetime.strptime(l.split("'")[1], "%m/%d/%y %H:%M:%S")
+                for l in lines if not l.startswith("pmset schedule cancel"))
+            return True
+        sc._admin_shell = admin
+        res = sc.ui_hooks()["save_search"](
+            {**TestSavingNeedsEmail.FORM,
+             "interval": {"every": 6, "unit": "hours"}})
+        self.assertNotIn("error", res)
+        self.assertTrue(written)
+        self.assertIn("wake itself", res["message"])
+
+    def test_a_declined_prompt_does_not_unsave_the_search(self):
+        sc.save_email_config(dict(TestSavingNeedsEmail.ACCOUNT))
+        for name in ("schedule_installed", "schedule_problems"):
+            self.addCleanup(setattr, sc, name, getattr(sc, name))
+        sc.schedule_installed = lambda: True
+        sc.schedule_problems = lambda: []
+        self.allow = False
+        res = sc.ui_hooks()["save_search"](
+            {**TestSavingNeedsEmail.FORM,
+             "interval": {"every": 6, "unit": "hours"}})
+        self.assertNotIn("error", res)
+        self.assertIn("password", res["message"])
+        self.assertEqual(len(sc.load_searches()), 1)
+
+    def test_pausing_the_search_cleans_the_queue_up(self):
+        self.hourly(6)
+        rec = sc.load_searches()[0]
+        self.on_machine = [sc.now_local() + timedelta(days=1)]
+        res = sc.ui_hooks()["update_search"](rec["id"], {"enabled": False})
+        self.assertNotIn("error", res)
+        self.assertTrue(all(l.startswith("pmset schedule cancel")
+                            for l in self.ran[-1]))
+
+    def test_the_window_opens_knowing_the_queue(self):
+        for name in ("schedule_installed", "schedule_problems"):
+            self.addCleanup(setattr, sc, name, getattr(sc, name))
+        sc.schedule_installed = lambda: True
+        sc.schedule_problems = lambda: []
+        self.hourly(12)
+        state = sc.ui_hooks()["schedule_state"]()
+        self.assertIs(state["wakes"]["relevant"], True)
+        self.assertEqual(state["hour_choices"], list(sc.HOUR_CHOICES))
+        self.assertEqual(state["daily_hour"], sc.DAILY_HOUR)
+
+    def test_the_renew_button_forces_a_rewrite(self):
+        self.hourly(12)
+        now_wakes = [sc.now_local() + timedelta(days=d, hours=1)
+                     for d in range(1, sc.WAKE_HORIZON_DAYS + 1)]
+        self.on_machine = now_wakes                  # deep, but forced anyway
+        res = sc.ui_hooks()["renew_wakes"]()
+        self.assertNotIn("error", res)
+        self.assertTrue(self.ran)
+        self.assertIn("wakes", res)
+
+    def test_turning_automatic_runs_on_writes_everything_in_one_prompt(self):
+        # The 5am repeat and the whole queue travel in the same batch: two
+        # password prompts for one click is how setup steps get abandoned.
+        self.hourly(6)
+        msg = sc.set_wakes(now=dt("2026-08-06T12:00:00"))
+        self.assertEqual(len(self.ran), 1)
+        lines = self.ran[0]
+        self.assertEqual(lines[0],
+                         "pmset repeat wakeorpoweron MTWRFSU 05:00:00")
+        self.assertTrue(any(l.startswith("pmset schedule wake")
+                            for l in lines[1:]))
+        self.assertIn("5am", msg)
+
+    def test_turning_them_off_takes_the_wake_ups_along(self):
+        self.on_machine = [dt("2026-08-07T17:00:00")]
+        plist = self.root / "agent.plist"
+        plist.write_text("<plist/>", encoding="utf-8")
+        self.addCleanup(setattr, sc, "plist_path", sc.plist_path)
+        self.addCleanup(setattr, sc, "_run", sc._run)
+        sc.plist_path = lambda: plist
+        sc._run = lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, "", "")
+        ok, msgs = sc.uninstall_schedule()
+        self.assertTrue(ok)
+        self.assertEqual(self.ran[0][0], "pmset repeat cancel")
+        self.assertIn("pmset schedule cancel wake '08/07/26 17:00:00' "
+                      "'Faceplace Marketbook' || true", self.ran[0])
 
 
 # ------------------------------------------------------------------------- SMTP
@@ -1650,10 +2006,6 @@ class TestScheduledPipeline(Redirected):
         storage.DB_PATH = self.root / "db.sqlite"
         storage.RUNS_DIR = self.root / "runs"
         self.addCleanup(self._restore_storage)
-        # pmset would really try to schedule a wake, so stub it out.
-        real_wake = sc.rearm_wake
-        sc.rearm_wake = lambda *a, **k: False
-        self.addCleanup(lambda: setattr(sc, "rearm_wake", real_wake))
 
         sc.save_email_config({"provider": "gmail", "address": "me@gmail.com",
                               "app_password": "pw"})
@@ -1900,6 +2252,32 @@ class TestScheduledPipeline(Redirected):
         summary = sc.run_saved_search(rec,
                                       sweep=self.stub_sweep([(self.batch("a"), [])]))
         self.assertEqual(summary["report"]["warnings"], [])
+
+    def test_the_report_nags_when_the_wake_queue_is_nearly_dry(self):
+        # Day 18 of 21: three days of wake-ups left. The report is the one
+        # channel guaranteed to reach someone whose machine runs unattended, so
+        # it's where the queue running out gets announced beforehand.
+        self.addCleanup(setattr, sc, "os_name", sc.os_name)
+        sc.os_name = lambda: "darwin"
+        rec = self.make(interval={"every": 6, "unit": "hours"})
+        sc.scheduled_wakes = lambda: [sc.now_local() + timedelta(days=2)]
+        summary = sc.run_saved_search(rec,
+                                      sweep=self.stub_sweep([(self.batch("a"), [])]))
+        nags = [w for w in summary["report"]["warnings"] if "wake" in w]
+        self.assertEqual(len(nags), 1)
+        self.assertIn("renew", nags[0])
+        body = RecordingSMTP.sent[0].get_body(("plain",)).get_content()
+        self.assertIn("wake", body)
+
+    def test_a_deep_wake_queue_earns_no_nag(self):
+        self.addCleanup(setattr, sc, "os_name", sc.os_name)
+        sc.os_name = lambda: "darwin"
+        rec = self.make(interval={"every": 6, "unit": "hours"})
+        sc.scheduled_wakes = lambda: [sc.now_local() + timedelta(days=15)]
+        summary = sc.run_saved_search(rec,
+                                      sweep=self.stub_sweep([(self.batch("a"), [])]))
+        self.assertFalse([w for w in summary["report"]["warnings"]
+                          if "wake" in w])
 
     # -- failures -----------------------------------------------------------
     def test_an_expired_session_emails_and_skips_the_rest_of_the_queue(self):

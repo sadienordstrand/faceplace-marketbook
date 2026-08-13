@@ -86,6 +86,28 @@ TICK_SECONDS = 900
 # Daily searches fire at this hour, local.
 DAILY_HOUR = 5
 
+# Hour-interval searches run at fixed times of day: DAILY_HOUR and then every so
+# many hours after it, the same times every day. The times have to be knowable
+# in advance because waking a sleeping Mac takes a queue of scheduled wake-ups
+# written days ahead (see the wake queue below), and a schedule computed from
+# whenever the last run happened to start would drift away from any queue within
+# a day. Divisors of 24, so the grid really is the same every day.
+HOUR_CHOICES = (3, 4, 6, 8, 12)
+
+# The wake queue: how many days of wake-ups get written at once, when the window
+# starts offering to renew them, and when report emails start saying so. The
+# horizon is deliberately short — these events are the only thing the app leaves
+# on a machine that can outlive the folder being dragged to the trash, so three
+# weeks of ghost wake-ups is the worst case rather than a permanent modification.
+WAKE_HORIZON_DAYS = 21
+WAKE_RENEW_BELOW_DAYS = 7
+WAKE_NAG_BELOW_DAYS = 3
+WAKE_OWNER = "Faceplace Marketbook"
+# A safety valve, not a target: the union of several searches' grids can get
+# dense, and the system's scheduled-events list is shared with every other
+# program on the machine.
+WAKE_MAX_EVENTS = 200
+
 # A run this far past its scheduled time gets reported as late, which is how a
 # laptop that was asleep or switched off shows up in your inbox.
 LATE_AFTER_HOURS = 2
@@ -427,6 +449,27 @@ def delete_search(search_id):
 
 
 # ---------- when does it run next ----------
+def grid_hours(every):
+    """The hours of the day an every-N-hours search runs at: DAILY_HOUR and then
+    every N hours after it, identical every day. For the offered choices —
+    divisors of 24 — the spacing is exact. A legacy value that doesn't divide 24
+    still gets a daily-repeating grid; it just has one short gap where the count
+    wraps past midnight back to DAILY_HOUR."""
+    every = max(1, min(24, int(every or 1)))
+    return sorted((DAILY_HOUR + k * every) % 24
+                  for k in range(-(-24 // every)))
+
+
+def next_grid_time(every, after):
+    """The first moment on the grid strictly after `after`."""
+    day = after.replace(hour=0, minute=0, second=0, microsecond=0)
+    for offset in (0, 1):
+        for h in grid_hours(every):
+            t = day + timedelta(days=offset, hours=h)
+            if t > after:
+                return t
+
+
 def next_run_at(search, after=None):
     """Scheduled from when the last run STARTED, not when it finished, so a slow
     run doesn't push every following run later and later."""
@@ -451,7 +494,16 @@ def next_run_at(search, after=None):
             target += timedelta(days=n)
         return target
 
-    step = timedelta(minutes=n) if unit == "minutes" else timedelta(hours=n)
+    if unit == "hours":
+        # The next grid time, not last + N hours. A run that started late — the
+        # 5pm slot reached at 6:20 because the Mac was asleep — measures from
+        # when it actually started, so the fires it slept through are skipped
+        # and the schedule snaps back to the same times as every other day.
+        return next_grid_time(n, last or now)
+
+    # Minutes exist for the test suite only, and keep the old free-running
+    # arithmetic: a grid is pointless at a scale no wake-up will ever serve.
+    step = timedelta(minutes=n)
     if last is None:
         return now
     target = last + step
@@ -1451,6 +1503,21 @@ def run_saved_search(search, email_cfg=None, sweep=None, send=True, now=None,
                 if summary.get("interrupted_during") == "sweep" else
                 "The run was stopped partway through, so some descriptions and "
                 "photos are missing.")
+        wakes = wake_queue_state()
+        if wakes.get("relevant") and wakes.get("nag"):
+            # The reports are the one channel guaranteed to reach someone whose
+            # machine runs unattended, so this is where the queue running dry
+            # gets announced before it happens rather than after.
+            days = wakes.get("days_left") or 0
+            warnings.append(
+                ("The wake-ups that let this Mac wake itself for hourly runs "
+                 f"cover only the next {days} day{'' if days == 1 else 's'}. "
+                 if days else
+                 "The wake-ups that let this Mac wake itself for hourly runs "
+                 "have run out. ")
+                + "Open Faceplace Marketbook and renew them from the Email & "
+                  "Setup tab. Until then, hourly searches run once a day at "
+                  f"{DAILY_HOUR}am, and whenever the Mac is awake.")
         unknown = summary.get("unknown_cities") or []
         if unknown:
             # Silence here would be the worst outcome: the report would look
@@ -1545,7 +1612,13 @@ def tick(now=None, sweep=None, send=True, force=None):
     except AlreadyRunning as e:
         log(f"Skipping this tick — {e}.")
         return []
-    rearm_wake()
+    # The tick runs unprivileged, so it can read how much of the wake queue is
+    # left but never refill it; the reports carry the nag, and this line makes
+    # the same fact visible to anyone reading the log.
+    state = wake_queue_state()
+    if state.get("relevant") and state.get("nag"):
+        log(f"  wake-up queue is nearly empty ({state['days_left']} days left) — "
+            f"open the settings window to renew it")
     return results
 
 
@@ -1609,33 +1682,159 @@ def earliest_next_run():
     return min(times) if times else None
 
 
-def rearm_wake(quiet=True):
-    """Try to give the next due run its own one-off scheduled wake.
+# ---------- the wake queue ----------
+# Hour-interval searches need the Mac woken several times a day, and macOS has
+# no standing rule for that: `pmset repeat` holds exactly one wake per day (the
+# 5am one), and everything else has to be a dated one-off event. Writing one
+# takes root, so events are queued WAKE_HORIZON_DAYS deep in a single authorized
+# batch — during the same password prompt as turning automatic runs on, or when
+# a search that changes the grid is saved — and renewed the same way. If the
+# queue runs dry, nothing breaks: the 5am wake never expires, so hourly searches
+# fall back to once a day plus whenever the machine is awake anyway.
+#
+# Each event carries WAKE_OWNER, which is pmset's own mechanism for programs
+# sharing the schedule: it makes ours recognisable in `pmset -g sched`, lets a
+# cancel remove only ours, and leaves everyone else's alone.
 
-    `pmset schedule` needs root, and this runs unattended (from a tick or a
-    button press), where nothing can show a password prompt — so `sudo -n`
-    only succeeds on a machine set up to allow pmset without a password.
-    Everywhere else this quietly does nothing, and the daily wake that
-    install_schedule sets (with a real password prompt) is what wakes the Mac.
-    Searches on hour intervals then run when the machine is next awake."""
+def wake_hours_needed(searches=None):
+    """The union of every enabled hour-interval search's grid, as hours of the
+    day — minus DAILY_HOUR, which the standing 5am repeat already covers."""
+    searches = load_searches() if searches is None else searches
+    hours = set()
+    for s in searches:
+        iv = s.get("interval") or {}
+        if s.get("enabled") and iv.get("unit") == "hours":
+            hours.update(grid_hours(iv.get("every")))
+    hours.discard(DAILY_HOUR)
+    return sorted(hours)
+
+
+def wake_times_needed(now=None, searches=None):
+    """Every wake-up the queue should hold, as datetimes, oldest first."""
+    now = now or now_local()
+    day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    out = [day + timedelta(days=d, hours=h)
+           for d in range(WAKE_HORIZON_DAYS + 1)
+           for h in wake_hours_needed(searches)]
+    return [t for t in out if t > now][:WAKE_MAX_EVENTS]
+
+
+_WAKE_LINE = re.compile(r"wake at (\d{2}/\d{2}/\d{4} \d{2}:\d{2}:\d{2}) by '([^']*)'")
+
+
+def scheduled_wakes():
+    """The app's own wake-ups currently queued with the system. Reading the
+    schedule needs no privileges; only writing it does."""
     if os_name() != "darwin":
-        return False
-    nxt = earliest_next_run()
-    if not nxt:
-        return False
-    # A little early, so we're already awake when the tick fires.
-    when = nxt - timedelta(minutes=2)
-    if when <= now_local():
-        return False
-    stamp = when.strftime("%m/%d/%y %H:%M:%S")
-    r = _run(["sudo", "-n", "pmset", "schedule", "wake", stamp])
-    if r.returncode != 0:
-        if not quiet:
-            log(f"  couldn't schedule a wake ({r.stderr.strip() or 'permission denied'})")
-        return False
-    if not quiet:
-        log(f"  Mac will wake at {fmt_when(when)} for the next run")
-    return True
+        return []
+    r = _run(["pmset", "-g", "sched"])
+    out = []
+    for m in _WAKE_LINE.finditer(r.stdout or ""):
+        if m.group(2) == WAKE_OWNER:
+            try:
+                out.append(datetime.strptime(m.group(1), "%m/%d/%Y %H:%M:%S"))
+            except ValueError:
+                pass
+    return sorted(out)
+
+
+def wake_queue_state(now=None):
+    """What's left of the queue, for the settings window and the reports.
+
+    `relevant` is False anywhere the queue means nothing: on Windows the
+    scheduled task wakes the machine itself, and with no hour-interval searches
+    the 5am repeat is the whole schedule."""
+    if os_name() != "darwin" or not wake_hours_needed():
+        return {"relevant": False}
+    now = now or now_local()
+    left = [w for w in scheduled_wakes() if w > now]
+    until = left[-1] if left else None
+    days_left = max(0, (until - now).days) if until else 0
+    return {"relevant": True, "queued": len(left), "days_left": days_left,
+            "until": iso(until),
+            "renew": days_left < WAKE_RENEW_BELOW_DAYS,
+            "nag": days_left <= WAKE_NAG_BELOW_DAYS}
+
+
+def _cancel_lines():
+    """The pmset commands that drop every queued event of ours. Best-effort
+    (`|| true`): a stale event that dodges its cancel is one extra wake-up that
+    expires on its own, not a reason to abort the batch."""
+    return [f"pmset schedule cancel wake '{w:%m/%d/%y %H:%M:%S}' "
+            f"'{WAKE_OWNER}' || true" for w in scheduled_wakes()]
+
+
+def _wake_lines(now=None, searches=None):
+    """The pmset commands that make the system queue match the saved searches:
+    drop every event of ours, then write the fresh set."""
+    return _cancel_lines() + [
+        f"pmset schedule wake '{w:%m/%d/%y %H:%M:%S}' '{WAKE_OWNER}'"
+        for w in wake_times_needed(now, searches)]
+
+
+def _admin_shell(lines):
+    """Run shell lines as root, in one authorization.
+
+    The lines go into a script file rather than an inline string because a
+    hundred chained pmset calls through AppleScript's quoting is how shell
+    injection bugs get written. `sudo -n` goes first — free when credentials
+    happen to be cached — and otherwise osascript puts up the standard macOS
+    administrator prompt, once, for the whole batch."""
+    if not lines:
+        return True
+    SCHEDULE_DIR.mkdir(parents=True, exist_ok=True)
+    script = SCHEDULE_DIR / "power_schedule.sh"
+    script.write_text("#!/bin/sh\n" + "\n".join(lines) + "\n", encoding="utf-8")
+    if _run(["sudo", "-n", "/bin/sh", str(script)]).returncode == 0:
+        return True
+    r = _run(["osascript", "-e",
+              'on run argv',
+              '-e', 'do shell script "/bin/sh " & quoted form of item 1 of argv '
+                    'with administrator privileges',
+              '-e', 'end run', str(script)])
+    return r.returncode == 0
+
+
+def renew_wakes(now=None, force=False):
+    """Bring the wake queue back to full depth, prompting for a password if
+    needed. Returns (changed, note): `changed` says whether anything was
+    written, and `note` is the user-facing sentence when there's something to
+    say — a refusal, or what the new queue covers.
+
+    Without `force`, a queue that's still deep enough and covers the right
+    hours is left alone, so saving a search doesn't prompt for a password it
+    doesn't need."""
+    if os_name() != "darwin":
+        return False, None
+    now = now or now_local()
+    needed = wake_hours_needed()
+    have = [w for w in scheduled_wakes() if w > now]
+    if not needed:
+        if not have:
+            return False, None
+        # The last hourly search is gone; the leftovers get cleaned up, but
+        # they'd also expire by themselves, so a declined prompt costs nothing.
+        if _admin_shell(_wake_lines(now)):
+            return True, None
+        return False, None
+    fresh = (bool(have)
+             and sorted({w.hour for w in have}) == needed
+             and (have[-1] - now).days >= WAKE_RENEW_BELOW_DAYS)
+    if fresh and not force:
+        return False, None
+    if not _admin_shell(_wake_lines(now)):
+        return False, ("The wake-up schedule wasn't updated — that's the step "
+                       "that needs your password. Without it, runs the Mac "
+                       "sleeps through happen at the next 5am wake-up, or "
+                       "whenever it's next awake. You can renew the wake-ups "
+                       "any time from the Email & Setup tab.")
+    state = wake_queue_state(now)
+    if not state.get("until"):
+        return True, None
+    return True, (f"Your Mac will wake itself for hourly runs through "
+                  f"{parse_iso(state['until']):%A, %B %-d} — "
+                  f"{state['days_left']} days out. Opening this window now and "
+                  f"then keeps that topped up.")
 
 
 def in_protected_folder(path=None):
@@ -1695,36 +1894,29 @@ def verify_agent_can_run(timeout=25):
     return False, None
 
 
-def _pmset_as_admin(args):
-    """Run a pmset command with root rights, prompting if needed.
-
-    pmset refuses everything but reads without root. `sudo -n` succeeds
-    instantly when credentials are already cached; otherwise osascript puts up
-    the standard macOS administrator-password dialog — the prompt the README
-    tells people to expect. Returns True on success."""
-    if _run(["sudo", "-n", "pmset"] + args).returncode == 0:
-        return True
-    cmd = " ".join(["pmset"] + args)
-    r = _run(["osascript", "-e",
-              f'do shell script "{cmd}" with administrator privileges'])
-    return r.returncode == 0
-
-
-def set_daily_wake():
-    """Set the repeating {DAILY_HOUR}am wake, and say what happened.
+def set_wakes(now=None):
+    """Set the standing {DAILY_HOUR}am wake and the whole wake queue, in one
+    authorization, and say what happened.
 
     wakeorpoweron can even start a Mac that was shut down, as long as someone
     unlocks it afterwards when FileVault is on."""
-    args = ["repeat", "wakeorpoweron", "MTWRFSU", f"{DAILY_HOUR:02d}:00:00"]
-    if _pmset_as_admin(args):
-        return (f"Your Mac will wake itself at {DAILY_HOUR}am for daily "
-                f"searches. Searches on hour intervals run whenever the Mac "
-                f"is next awake.")
-    return (f"Couldn't set the daily wake — the password prompt was cancelled "
-            f"or failed. Runs still happen, but only once the Mac is awake. "
-            f"To set the wake yourself, open Terminal and run:\n"
-            f"    sudo pmset repeat wakeorpoweron MTWRFSU "
-            f"{DAILY_HOUR:02d}:00:00")
+    lines = [f"pmset repeat wakeorpoweron MTWRFSU {DAILY_HOUR:02d}:00:00"]
+    lines += _wake_lines(now)
+    if not _admin_shell(lines):
+        return (f"Couldn't set the wake-ups — the password prompt was cancelled "
+                f"or failed. Runs still happen, but only while the Mac is awake. "
+                f"To set the daily {DAILY_HOUR}am wake yourself, open Terminal "
+                f"and run:\n"
+                f"    sudo pmset repeat wakeorpoweron MTWRFSU "
+                f"{DAILY_HOUR:02d}:00:00")
+    msg = f"Your Mac will wake itself at {DAILY_HOUR}am for daily searches"
+    state = wake_queue_state(now)
+    if state.get("relevant") and state.get("until"):
+        msg += (f", and at each hourly search's times through "
+                f"{parse_iso(state['until']):%A, %B %-d}.")
+    else:
+        msg += "."
+    return msg
 
 
 def install_schedule(daily_wake=True, verify=True):
@@ -1758,8 +1950,7 @@ def install_schedule(daily_wake=True, verify=True):
         msgs.append(f"Scheduler installed; it checks for due searches every "
                     f"{TICK_SECONDS // 60} minutes.")
         if daily_wake:
-            msgs.append(set_daily_wake())
-        rearm_wake(quiet=False)
+            msgs.append(set_wakes())
         return True, msgs
 
     if system == "windows":
@@ -1842,10 +2033,13 @@ def uninstall_schedule():
         plist_path().unlink(missing_ok=True)
         msgs.append("Automatic runs are off. Your scheduled searches are untouched — "
                     "you can still run them by hand.")
-        if not _pmset_as_admin(["repeat", "cancel"]):
-            msgs.append("The daily 5am wake couldn't be removed without your "
-                        "password. It's harmless on its own; to remove it, open "
-                        "Terminal and run:\n    sudo pmset repeat cancel")
+        if not _admin_shell(["pmset repeat cancel"] + _cancel_lines()):
+            msgs.append(f"The wake-ups couldn't be removed without your "
+                        f"password. They're harmless on their own, and the "
+                        f"hourly ones expire by themselves within "
+                        f"{WAKE_HORIZON_DAYS} days; to remove the daily "
+                        f"{DAILY_HOUR}am one, open Terminal and run:\n"
+                        f"    sudo pmset repeat cancel")
         return True, msgs
     if system == "windows":
         _run(["schtasks", "/delete", "/tn", WIN_TASK, "/f"])
@@ -1882,15 +2076,35 @@ def schedule_points_here():
     return True
 
 
+def scheduling_available():
+    """Whether a scheduled search saved right now would ever actually run.
+
+    Two things have to be true, and until both are, a saved search is a thing
+    that looks scheduled and isn't: automatic runs have to be installed, and they
+    have to be working. Installed-but-blocked is the state worth naming — a task
+    left pointing at the folder's old location, or a scheduler that stopped
+    checking in, both read as "on" everywhere else.
+
+    On anything but macOS and Windows there is no schedule to install, so there's
+    nothing to insist on. Saved searches are still worth having there: they run
+    by hand with `--run NAME`, which is what the settings window says.
+    """
+    if os_name() == "other":
+        return True
+    return schedule_installed() and not schedule_problems()
+
+
 def schedule_problems():
     """Reasons automatic runs could be installed and still do nothing. Each is
     something the user can act on, phrased for the settings window."""
     if not schedule_installed():
         return []
     if not schedule_points_here():
+        # Plain text: the window renders this box with textContent, so any
+        # markdown would show up as literal asterisks.
         return ["Automatic runs are pointing at a different location for this "
-                "folder, which happens when it gets moved or renamed. Turn them "
-                "off and on again to fix it."]
+                "folder, which happens when it gets moved or renamed. Click "
+                "Turn off and then Turn on again to fix it."]
     beat = last_check_in()
     if not beat:
         return permission_help()
@@ -1965,16 +2179,28 @@ def ui_hooks():
     dict; an "error" key is shown to the user and nothing else happens."""
 
     def save_search(payload):
-        # A scheduled search's whole output is an email. Letting one be saved before
-        # there's an account to send it from produced searches that ran on time,
-        # found things, and told nobody — and the step that was skipped is two
-        # tabs away, so nothing about the silence pointed back at it.
+        # Two things have to be in place first, and a search saved without either
+        # is the same failure: one that looks scheduled, and quietly is not. The
+        # window bars this itself, so getting here means it was out of date about
+        # one of them — email taken away, or automatic runs turned off, since it
+        # opened. Each answer says which, so the block it should have been showing
+        # goes up.
+        #
+        # No email means a search that runs on time, finds things and tells
+        # nobody. That's what this used to do, and because the step that was
+        # missed is two tabs away, nothing about the silence pointed back at it.
         if not email_ready():
             return {"error": "Set your email up first, on the Email & Setup "
                              "tab. A scheduled search reports what it found by "
                              "email, so there's nothing for one to do until it "
                              "can send you mail.",
                     "email_ready": False}
+        # And no automatic runs means nothing ever starts it.
+        if not scheduling_available():
+            return {"error": "Turn automatic runs on first, on the Email & Setup "
+                             "tab. Nothing would start this search until they "
+                             "are on and working.",
+                    "schedule_ready": False}
         rec = _from_form(payload)
         editing = payload.get("id")
         if editing:
@@ -1990,11 +2216,17 @@ def ui_hooks():
                     f"{describe_interval(updated['interval'])}, next "
                     f"{fmt_when(parse_iso(updated['next_run']))}.")
         msgs = [what]
-        if not schedule_installed():
-            msgs.append("Automatic runs are still off — turn them on from the "
-                        "Email & Setup tab, or this won't run on its own.")
-        elif os_name() == "darwin":
-            rearm_wake()
+        if os_name() == "other":
+            # The one system where saving doesn't imply anything will start it.
+            msgs.append("There are no automatic runs on this system, so start "
+                        "this one yourself with --run when you want it.")
+        else:
+            # Saving may have changed which times of day the Mac has to wake
+            # at, so the queue is brought up to date — the one step here that
+            # can put up a password prompt. Skipped when nothing changed.
+            _, note = renew_wakes()
+            if note:
+                msgs.append(note)
         return {"message": " ".join(msgs),
                 "warnings": interval_warnings(updated, load_searches()),
                 **searches_for_ui()}
@@ -2003,13 +2235,18 @@ def ui_hooks():
         _, err = update_search(search_id, changes)
         if err:
             return {"error": err}
-        return searches_for_ui()
+        # Pausing or resuming an hourly search changes which times of day the
+        # Mac has to wake at. The note rides along for the window to show when
+        # the rewrite was refused or worth reporting.
+        _, note = renew_wakes()
+        return {**searches_for_ui(), **({"note": note} if note else {})}
 
     def do_delete(search_id):
         _, err = delete_search(search_id)
         if err:
             return {"error": err}
-        return searches_for_ui()
+        _, note = renew_wakes()
+        return {**searches_for_ui(), **({"note": note} if note else {})}
 
     def check(payload):
         rec = _from_form(payload)
@@ -2079,12 +2316,31 @@ def ui_hooks():
                 hint += f" Last checked {fmt_when(parse_iso(beat['at']))}."
         else:
             hint = ("Turn on automatic runs to enable scheduled searches.")
+        # `ready` is the one thing the rest of the window acts on, and it is not
+        # the same as `installed`: on and blocked runs nothing. Worked out here so
+        # the page never has to decide for itself what counts.
         return {"installed": installed, "hint": hint,
-                "problems": schedule_problems()}
+                "problems": schedule_problems(),
+                "ready": scheduling_available(),
+                # Which computer this is, so the window can show the system
+                # settings for it and only for it. Instructions for the other
+                # one are worse than none: they name menus that aren't there.
+                "os": os_name(),
+                # What the hourly-interval dropdown offers and where its grid is
+                # anchored, so the page never invents its own copy of either.
+                "hour_choices": list(HOUR_CHOICES), "daily_hour": DAILY_HOUR,
+                "wakes": wake_queue_state()}
 
     def set_schedule(on):
         ok, msgs = install_schedule() if on else uninstall_schedule()
         return {"ok": ok, "messages": msgs}
+
+    def do_renew_wakes():
+        changed, note = renew_wakes(force=True)
+        if not changed:
+            return {"error": note or "There was nothing to renew."}
+        return {"message": note or "The wake-up schedule is up to date.",
+                "wakes": wake_queue_state()}
 
     def email_for_ui():
         # The window opens knowing whether scheduled searches are usable, so the
@@ -2104,6 +2360,7 @@ def ui_hooks():
         "test_email": test_email,
         "schedule_state": state,
         "set_schedule": set_schedule,
+        "renew_wakes": do_renew_wakes,
         "units": UNITS if DEV_MODE else ("hours", "days"),
     }
 

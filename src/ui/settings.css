@@ -298,6 +298,53 @@
   .dot.on { background: #8FA85C; }
   .dot.stuck { background: var(--accent); }
 
+  /* System settings. What makes a run happen on time and what merely tidies up
+     around it are different kinds of news, so they're told apart twice over: a
+     heading for each group, and a bar down the side of every item in it.
+     Filled accent for the ones worth doing, hairline grey for the rest. */
+  .sysheader { display: flex; align-items: baseline; gap: 12px; margin-bottom: 14px; }
+  .sysheader h2 { margin-bottom: 0; }
+  .osbadge {
+    font-family: var(--type); font-size: 9pt; letter-spacing: .16em;
+    text-transform: uppercase; color: var(--ink-soft);
+    border: 1px solid var(--rule); border-radius: 2px; padding: 2px 8px;
+  }
+  .sysrule {
+    display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
+    margin: 22px 0 11px;
+  }
+  .sysgrp > .sysrule:first-child { margin-top: 0; }
+  .sysrule .tag {
+    flex: none; font-family: var(--type); font-size: 9pt; letter-spacing: .2em;
+    text-transform: uppercase; border-radius: 2px; padding: 3px 10px;
+  }
+  .sysrule.rec .tag {
+    background: var(--accent); color: #241608; font-weight: 700;
+  }
+  .sysrule.opt .tag { border: 1px solid var(--rule); color: var(--ink-soft); }
+  .sysrule .tagwhy {
+    flex: 1; min-width: 0; color: var(--ink-soft); font-size: 10.5pt;
+  }
+  .setting { border-left: 3px solid var(--rule); padding: 12px 15px; margin-bottom: 10px; }
+  .setting:last-child { margin-bottom: 0; }
+  .setting.rec {
+    border-left-color: var(--accent); background: rgba(237,146,107,.09);
+  }
+  .setting.opt { background: rgba(255,255,255,.017); }
+  .setname {
+    font-family: var(--type); font-size: 11pt; font-weight: 700;
+    letter-spacing: .1em; text-transform: uppercase; color: var(--ink);
+  }
+  /* The click path, in the typewriter face so it reads as something to follow
+     rather than as more prose. */
+  .setpath {
+    font-family: var(--type); font-size: 10pt; line-height: 1.55;
+    color: var(--accent-soft); margin-top: 7px;
+  }
+  .setting .hint { margin-top: 7px; }
+  /* The value to choose, which is the part being looked for. */
+  .setting .hint b { color: var(--ink); }
+
   /* The first-launch offer of a desktop, Dock or Start menu shortcut. */
   .scrim {
     position: fixed; inset: 0; z-index: 20; padding: 26px;

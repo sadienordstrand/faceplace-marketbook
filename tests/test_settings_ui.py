@@ -67,13 +67,23 @@ class UITest(unittest.TestCase):
         sc.SCHEDULE_DIR = root / ".schedule"
         sc.LOCK_PATH = sc.SCHEDULE_DIR / "run.lock"
         sc.TICK_LOG = sc.SCHEDULE_DIR / "tick.log"
-        # Never let a test reach launchd or Task Scheduler.
+        # Never let a test reach launchd or Task Scheduler. Automatic runs are on
+        # and working by default, because that's the state a scheduled search can
+        # be set up in; the tests about that refusal turn it off for themselves
+        # with drive(schedule=False).
         self._installed = sc.schedule_installed
-        sc.schedule_installed = lambda: False
+        sc.schedule_installed = lambda: True
+        self._problems = sc.schedule_problems
+        sc.schedule_problems = lambda: []
         self._install = sc.install_schedule
         sc.install_schedule = lambda **kw: (True, ["pretend installed"])
-        self._wake = sc.rearm_wake
-        sc.rearm_wake = lambda *a, **k: False
+        # The wake queue must never reach the real system: writing it can raise
+        # a macOS password prompt mid-test, and reading it answers with whatever
+        # this machine happens to have scheduled.
+        self._wake = {"scheduled_wakes": sc.scheduled_wakes,
+                      "_admin_shell": sc._admin_shell}
+        sc.scheduled_wakes = lambda: []
+        sc._admin_shell = lambda lines: True
         # A link in the window opens the everyday browser, which no test may
         # actually do; what would have opened is recorded instead.
         self.opened = []
@@ -84,23 +94,28 @@ class UITest(unittest.TestCase):
 
     def _restore(self):
         sc.schedule_installed = self._installed
+        sc.schedule_problems = self._problems
         sc.install_schedule = self._install
-        sc.rearm_wake = self._wake
+        for k, v in self._wake.items():
+            setattr(sc, k, v)
         settings_ui.open_link = self._open_link
         for k, v in self._saved.items():
             setattr(sc, k, v)
 
     def drive(self, script, defaults=None, cities=None, builtins=(),
-              extra_hooks=None, email=True):
+              extra_hooks=None, email=True, schedule=True):
         """Opens the window, runs `script(page)`, returns what was submitted.
 
-        `email` writes a working email account before the window opens, because
-        a scheduled search can't be made without one — the tests that are about
-        that refusal are the ones that turn it off."""
+        `email` writes a working email account before the window opens and
+        `schedule` has automatic runs on and unblocked, because a scheduled search
+        can't be made without both — the tests that are about those refusals are
+        the ones that turn them off."""
         result = {}
         cities = list(cities or CITIES)
         if email:
             sc.save_email_config(ACCOUNT)
+        if not schedule:
+            sc.schedule_installed = lambda: False
 
         def ready(page):
             page.on("console", lambda m: m.type == "error"
@@ -191,8 +206,13 @@ class UITest(unittest.TestCase):
     def fill_and_save(self, page, name="Defender 110", every="1", unit="days"):
         page.fill("#query", "defender 110")
         page.fill("#save_name", name)
-        page.fill("#save_every", every)
         page.select_option("#save_unit", unit)
+        # Hours are a menu of fixed choices, everything else is a typed number;
+        # only the visible one is read when the search is saved.
+        if unit == "hours":
+            page.select_option("#save_every_hours", every)
+        else:
+            page.fill("#save_every", every)
         # Leave one city selected.
         page.click("#noCities")
         page.click(".cities .tog[data-city='Medford, OR']")
@@ -314,11 +334,15 @@ class UITest(unittest.TestCase):
     def test_editing_a_search_relabels_the_units_for_its_interval(self):
         def script(page):
             self.fill_and_save(page, every="6", unit="hours")
+            # Put the form back to a singular reading, so the edit below has
+            # something to visibly change.
+            page.select_option("#save_unit", "days")
             page.fill("#save_every", "1")
+            self.assertEqual(self.unit_labels(page), ["hour", "day"])
             page.click("#tabSaved")
             page.click(".card button[data-act=edit]")
             page.wait_for_selector("#cancelEdit:not([hidden])")
-            self.assertEqual(page.input_value("#save_every"), "6")
+            self.assertEqual(page.input_value("#save_every_hours"), "6")
             self.assertEqual(self.unit_labels(page), ["hours", "days"])
         self.drive(script)
 
@@ -398,14 +422,14 @@ class UITest(unittest.TestCase):
 
     def test_editing_loads_the_search_back_into_the_form(self):
         def script(page):
-            self.fill_and_save(page, name="Rover", every="2", unit="hours")
+            self.fill_and_save(page, name="Rover", every="6", unit="hours")
             page.click("#tabSaved")
             page.click(".card button[data-act=edit]")
             # It should jump back to the search tab with everything filled in.
             page.wait_for_selector("#paneNew:not([hidden])")
             self.assertEqual(page.input_value("#query"), "defender 110")
             self.assertEqual(page.input_value("#save_name"), "Rover")
-            self.assertEqual(page.input_value("#save_every"), "2")
+            self.assertEqual(page.input_value("#save_every_hours"), "6")
             self.assertEqual(page.input_value("#save_unit"), "hours")
             self.assertEqual(page.text_content("#saveSearch"), "Update scheduled search")
             self.assertFalse(page.is_hidden("#cancelEdit"))
@@ -859,7 +883,7 @@ class UITest(unittest.TestCase):
             self.assertIn("off", page.text_content("#schedState"))
             self.assertFalse(page.is_hidden("#schedOn"))
             self.assertTrue(page.is_hidden("#schedOff"))
-        self.drive(script)
+        self.drive(script, schedule=False)
 
     def test_turning_automatic_runs_on_reports_back(self):
         def script(page):
@@ -867,7 +891,7 @@ class UITest(unittest.TestCase):
             page.click("#schedOn")
             page.wait_for_selector("#schedMsg:not([hidden])")
             self.assertIn("pretend installed", page.text_content("#schedMsg"))
-        self.drive(script)
+        self.drive(script, schedule=False)
 
     def test_a_refused_install_shows_the_instructions_in_full(self):
         # macOS installs an agent it then denies every file to. The several
@@ -885,7 +909,7 @@ class UITest(unittest.TestCase):
             self.assertTrue(page.is_hidden("#schedMsg"))
             self.assertEqual(
                 page.text_content("#schedProblem code").strip(), sc.python_exe())
-        self.drive(script)
+        self.drive(script, schedule=False)
 
     def test_an_installed_but_silent_scheduler_is_flagged_on_arrival(self):
         sc.schedule_installed = lambda: True
@@ -909,6 +933,103 @@ class UITest(unittest.TestCase):
                 "() => !document.getElementById('schedState')"
                 ".textContent.includes('Checking')")
             self.assertTrue(page.is_hidden("#schedProblem"))
+        self.drive(script)
+
+    # --------------------------------------------- the computer's own settings
+    def pretend(self, system):
+        self.addCleanup(setattr, sc, "os_name", sc.os_name)
+        sc.os_name = lambda: system
+
+    def test_the_mac_gets_the_mac_settings_and_not_the_windows_ones(self):
+        # The other computer's instructions are worse than none at all: they
+        # name menus that don't exist here.
+        self.pretend("darwin")
+
+        def script(page):
+            page.click("#tabEmail")
+            page.wait_for_selector("#sysBlock:not([hidden])")
+            self.assertFalse(page.is_hidden("#sysMac"))
+            self.assertTrue(page.is_hidden("#sysWin"))
+            self.assertEqual(page.text_content("#sysOs"), "macOS")
+            # inner_text rather than text_content: the other computer's half is
+            # hidden, not absent, and this is about what's on the screen. It
+            # comes back as it's drawn, so a name the CSS shouts is compared
+            # in lower case.
+            text = page.inner_text("#sysBlock").lower()
+            self.assertIn("wake for network access", text)
+            self.assertIn("system settings → battery → options…", text)
+            self.assertNotIn("control panel", text)
+        self.drive(script)
+
+    def test_windows_gets_the_windows_settings_and_not_the_mac_ones(self):
+        self.pretend("windows")
+
+        def script(page):
+            page.click("#tabEmail")
+            page.wait_for_selector("#sysBlock:not([hidden])")
+            self.assertFalse(page.is_hidden("#sysWin"))
+            self.assertTrue(page.is_hidden("#sysMac"))
+            self.assertEqual(page.text_content("#sysOs"), "Windows")
+            text = page.inner_text("#sysBlock").lower()
+            self.assertIn("allow wake timers", text)
+            self.assertIn("control panel", text)
+            self.assertNotIn("system settings", text)
+        self.drive(script)
+
+    def test_the_settings_worth_doing_are_marked_apart_from_the_rest(self):
+        # The whole point of the section: what keeps runs on time has to be
+        # distinguishable at a glance from what merely tidies up around them.
+        self.pretend("darwin")
+
+        def script(page):
+            page.click("#tabEmail")
+            page.wait_for_selector("#sysBlock:not([hidden])")
+            groups = page.eval_on_selector_all(
+                "#sysMac .sysrule .tag", "els => els.map(e => e.textContent)")
+            self.assertEqual(groups, ["Recommended", "Optional"])
+            self.assertEqual(page.locator("#sysMac .setting.rec").count(), 1)
+            self.assertEqual(page.locator("#sysMac .setting.opt").count(), 2)
+            self.assertIn("Wake for network access",
+                          page.text_content("#sysMac .setting.rec"))
+            # And the difference is visible, not only in the markup: the two
+            # kinds of item are barred in different colours.
+            bars = page.eval_on_selector_all(
+                "#sysMac .setting",
+                "els => els.map(e => getComputedStyle(e).borderLeftColor)")
+            self.assertEqual(len(set(bars)), 2, bars)
+            self.assertEqual(bars[0], page.eval_on_selector(
+                "#sysMac .sysrule.rec .tag",
+                "el => getComputedStyle(el).backgroundColor"))
+        self.drive(script)
+
+    def test_windows_counts_the_lid_among_the_settings_worth_doing(self):
+        # It's the one difference between the two lists: a Windows laptop that
+        # hibernates on the lid closing stops runs outright, where a Mac only
+        # sleeps more deeply.
+        self.pretend("windows")
+
+        def script(page):
+            page.click("#tabEmail")
+            page.wait_for_selector("#sysBlock:not([hidden])")
+            self.assertEqual(
+                page.eval_on_selector_all(
+                    "#sysWin .setting.rec .setname",
+                    "els => els.map(e => e.textContent)"),
+                ["Allow wake timers", "Closing the lid"])
+            self.assertEqual(
+                page.eval_on_selector_all(
+                    "#sysWin .setting.opt .setname",
+                    "els => els.map(e => e.textContent)"),
+                ["Battery saver"])
+        self.drive(script)
+
+    def test_a_computer_with_no_automatic_runs_is_told_nothing_about_them(self):
+        self.pretend("other")
+
+        def script(page):
+            page.click("#tabEmail")
+            page.wait_for_selector("#schedState:not(:empty)")
+            self.assertTrue(page.is_hidden("#sysBlock"))
         self.drive(script)
 
     def test_a_built_in_city_has_no_remove_button(self):
@@ -1023,7 +1144,8 @@ class UITest(unittest.TestCase):
         # working one.
         def script(page):
             page.fill("#query", "defender 110")
-            self.assertFalse(page.is_hidden("#saveNeedsEmail"))
+            self.assertFalse(page.is_hidden("#saveBlocked"))
+            self.assertIn("email", page.text_content("#saveBlockedWhy"))
             self.assertTrue(page.is_disabled("#saveSearch"))
             for box in ("#save_name", "#save_email", "#save_every", "#save_unit"):
                 self.assertTrue(page.is_disabled(box), box)
@@ -1051,10 +1173,11 @@ class UITest(unittest.TestCase):
             page.wait_for_selector("#mailMsg:not([hidden])")
             self.assertIn("Email is set up", page.text_content("#mailState"))
             self.assertIn("on", page.get_attribute("#mailDot", "class"))
-            # And the way back to the search they were in the middle of saving.
-            page.click("#backToSave")
-            page.wait_for_selector("#paneNew:not([hidden])")
-            self.assertTrue(page.is_hidden("#saveNeedsEmail"))
+            # No button back: the tab is one click away, and the last thing
+            # someone finishing this step needs is another button to read.
+            self.assertIsNone(page.query_selector("#backToSave"))
+            page.click("#tabNew")
+            self.assertTrue(page.is_hidden("#saveBlocked"))
             self.assertFalse(page.is_disabled("#save_name"))
             self.assertIn("Saved", self.fill_and_save(page))
         self.drive(script, email=False)
@@ -1093,7 +1216,7 @@ class UITest(unittest.TestCase):
             page.fill("#mail_password", "abcd efgh ijkl mnop")
             page.click("#saveMail")
             page.wait_for_selector("#mailMsg:not([hidden])")
-            page.click("#backToSave")
+            page.click("#tabNew")
             self.assertEqual(page.input_value("#save_email"), "me@gmail.com")
         self.drive(script, email=False)
 
@@ -1110,20 +1233,205 @@ class UITest(unittest.TestCase):
     def test_the_saved_tab_says_why_nothing_would_arrive(self):
         def script(page):
             page.click("#tabSaved")
-            self.assertFalse(page.is_hidden("#savedNeedsEmail"))
+            self.assertFalse(page.is_hidden("#savedBlocked"))
+            self.assertIn("email", page.text_content("#savedBlockedWhy"))
             # The empty list sends you to the same place the banner does,
             # rather than to the New search tab where saving is still barred.
-            self.assertIn("set up your email", page.text_content("#savedList"))
+            self.assertIn("Email & Setup", page.text_content("#savedList"))
         self.drive(script, email=False)
 
-    def test_a_window_that_opens_with_email_working_is_not_blocked(self):
+    # ------------------------------------- automatic runs, the other half of it
+    def test_a_search_cannot_be_saved_while_automatic_runs_are_off(self):
+        # Email set up and nothing to start it is the same failure as the other
+        # way round: a search that looks scheduled and never runs.
         def script(page):
-            self.assertTrue(page.is_hidden("#saveNeedsEmail"))
+            page.fill("#query", "defender 110")
+            self.assertFalse(page.is_hidden("#saveBlocked"))
+            self.assertIn("automatic runs", page.text_content("#saveBlockedWhy"))
+            self.assertTrue(page.is_disabled("#saveSearch"))
+            self.assertTrue(page.is_disabled("#save_name"))
+            # And the sweep you sit and watch is still none of its business.
+            self.assertFalse(page.is_disabled("#start"))
+        self.drive(script, schedule=False)
+        self.assertFalse(sc.SEARCHES_PATH.exists())
+
+    def test_both_missing_are_named_together_rather_than_one_at_a_time(self):
+        # Being sent to fix one and then met with the other is how two steps come
+        # to feel like a fault.
+        def script(page):
+            why = page.text_content("#saveBlockedWhy")
+            self.assertIn("email", why)
+            self.assertIn("automatic runs", why)
+        self.drive(script, email=False, schedule=False)
+
+    def test_turning_automatic_runs_on_unlocks_saving(self):
+        def script(page):
+            self.assertFalse(page.is_hidden("#saveBlocked"))
+            page.click("#tabEmail")
+            # install_schedule is stubbed, so this is the button doing its job,
+            # not launchd.
+            sc.schedule_installed = lambda: True
+            page.click("#schedOn")
+            page.wait_for_selector("#schedMsg:not([hidden])")
+            page.click("#tabNew")
+            self.assertTrue(page.is_hidden("#saveBlocked"))
+            self.assertFalse(page.is_disabled("#save_name"))
+            self.assertIn("Saved", self.fill_and_save(page))
+        self.drive(script, schedule=False)
+        self.assertEqual(len(self.saved()), 1)
+
+    def test_runs_that_are_on_but_blocked_do_not_count_as_on(self):
+        # The state that used to read as "on" everywhere while running nothing:
+        # a task left pointing at the folder's old home, or a scheduler that
+        # stopped checking in.
+        sc.schedule_problems = lambda: ["Automatic runs are pointing somewhere else."]
+
+        def script(page):
+            self.assertFalse(page.is_hidden("#saveBlocked"))
+            self.assertTrue(page.is_disabled("#saveSearch"))
+            page.click("#tabEmail")
+            self.assertEqual(page.text_content("#schedState"),
+                             "Automatic runs are on, but blocked")
+        self.drive(script)
+
+    # ------------------------------------------- hour intervals and wake-ups
+    def hourly_on_mac(self, days_deep=None):
+        """A saved every-6-hours search on a pretend Mac, with the wake queue
+        `days_deep` days from dry. None means no wake-ups queued at all."""
+        self.addCleanup(setattr, sc, "os_name", sc.os_name)
+        sc.os_name = lambda: "darwin"
+        rec, err = sc.add_search({"name": "Nightly", "query": "defender 110",
+                                  "cities": ["Medford, OR"],
+                                  "interval": {"every": 6, "unit": "hours"}})
+        assert err is None, err
+        if days_deep is not None:
+            from datetime import timedelta
+            sc.scheduled_wakes = lambda: [
+                sc.now_local().replace(minute=0, second=0, microsecond=0)
+                + timedelta(days=d, hours=1) for d in range(1, days_deep + 1)]
+        return rec
+
+    def test_hours_are_a_menu_that_names_its_times(self):
+        # The count box swaps for fixed choices, and the hint spells out where
+        # the grid lands, so "every 6 hours" is never a guess.
+        def script(page):
+            page.select_option("#save_unit", "hours")
+            self.assertTrue(page.is_hidden("#save_every"))
+            self.assertEqual(
+                page.eval_on_selector_all("#save_every_hours option",
+                                          "els => els.map(e => e.value)"),
+                ["3", "4", "6", "8", "12"])
+            page.select_option("#save_every_hours", "6")
+            self.assertIn("5 am, 11 am, 5 pm and 11 pm",
+                          page.text_content("#everyHint"))
+            page.select_option("#save_every_hours", "12")
+            self.assertIn("5 am and 5 pm", page.text_content("#everyHint"))
+            # And back to days, the typed number returns.
+            page.select_option("#save_unit", "days")
+            self.assertFalse(page.is_hidden("#save_every"))
+            self.assertTrue(page.is_hidden("#save_every_hours"))
+        self.drive(script)
+
+    def test_an_unoffered_hour_count_falls_back_to_a_real_choice(self):
+        # A count the menu doesn't offer — hand-edited json — must not leave
+        # the menu with nothing selected when the search is edited.
+        rec, err = sc.add_search({"name": "Old timer", "query": "defender",
+                                  "cities": ["Medford, OR"],
+                                  "interval": {"every": 5, "unit": "hours"}})
+        self.assertIsNone(err)
+
+        def script(page):
+            page.click("#tabSaved")
+            page.click(".card button[data-act=edit]")
+            page.wait_for_selector("#cancelEdit:not([hidden])")
+            self.assertEqual(page.input_value("#save_every_hours"), "3")
+        self.drive(script)
+
+    def test_the_wake_status_lives_on_the_email_tab(self):
+        self.hourly_on_mac(days_deep=20)
+
+        def script(page):
+            self.assertTrue(page.is_hidden("#wakeBar"))
+            page.click("#tabEmail")
+            page.wait_for_selector("#wakeRow:not([hidden])")
+            self.assertIn("Wake-ups for scheduled searches are in effect until",
+                          page.text_content("#wakeState"))
+            self.assertIn("renewing now and then",
+                          page.text_content("#wakeHint"))
+        self.drive(script)
+
+    def test_the_wake_status_is_absent_without_hourly_searches(self):
+        def script(page):
+            self.assertTrue(page.is_hidden("#wakeBar"))
+            page.click("#tabEmail")
+            page.wait_for_selector("#schedState:not(:empty)")
+            self.assertTrue(page.is_hidden("#wakeRow"))
+        self.drive(script)
+
+    def test_a_low_queue_raises_a_banner_at_open(self):
+        # Day 14 of 21. The banner is the "renew at next open" the README
+        # promises: front and centre whichever tab the window opens on.
+        self.hourly_on_mac(days_deep=6)
+
+        def script(page):
+            self.assertFalse(page.is_hidden("#wakeBar"))
+            self.assertIn("runs multiple times a day",
+                          page.text_content("#wakeText"))
+            self.assertIn("run out in 6 days", page.text_content("#wakeText"))
+            page.click("#wakeLater")
+            self.assertTrue(page.is_hidden("#wakeBar"))
+        self.drive(script)
+
+    def test_renewing_from_the_banner_reports_what_it_did(self):
+        self.hourly_on_mac(days_deep=2)
+        self.ran = []
+        sc._admin_shell = lambda lines: self.ran.append(list(lines)) or True
+
+        def script(page):
+            page.click("#wakeRenew")
+            page.wait_for_selector("#wakeBarMsg:not([hidden])")
+            self.assertIn("wake itself", page.text_content("#wakeBarMsg"))
+        self.drive(script)
+        self.assertTrue(self.ran)
+
+    def test_a_declined_renewal_says_so_instead_of_pretending(self):
+        self.hourly_on_mac(days_deep=2)
+        sc._admin_shell = lambda lines: False
+
+        def script(page):
+            page.click("#tabEmail")
+            page.wait_for_selector("#renewWakes")
+            page.click("#renewWakes")
+            page.wait_for_selector("#wakeMsg:not([hidden])")
+            self.assertIn("password", page.text_content("#wakeMsg"))
+        self.drive(script)
+
+    def test_a_save_refused_by_python_shuts_the_block_the_window_left_open(self):
+        # The window can be out of date: automatic runs switched off elsewhere
+        # since it opened. The refusal has to be the news, or the form stays
+        # invitingly enabled.
+        def script(page):
+            page.fill("#query", "defender 110")
+            page.fill("#save_name", "nightly")
+            sc.schedule_installed = lambda: False
+            page.click("#saveSearch")
+            page.wait_for_selector("#saveMsg:not([hidden])")
+            self.assertIn("Turn automatic runs on", page.text_content("#saveMsg"))
+            self.assertFalse(page.is_hidden("#saveBlocked"))
+            self.assertTrue(page.is_disabled("#save_name"))
+        self.drive(script)
+        self.assertFalse(sc.SEARCHES_PATH.exists())
+
+    def test_a_window_that_opens_ready_for_a_scheduled_search_is_not_blocked(self):
+        def script(page):
+            self.assertTrue(page.is_hidden("#saveBlocked"))
             self.assertFalse(page.is_disabled("#save_name"))
             page.click("#tabSaved")
-            self.assertTrue(page.is_hidden("#savedNeedsEmail"))
+            self.assertTrue(page.is_hidden("#savedBlocked"))
             page.click("#tabEmail")
             self.assertIn("Email is set up", page.text_content("#mailState"))
+            self.assertEqual(page.text_content("#schedState"),
+                             "Automatic runs are on")
             # And the save block is already holding the address it would use.
             self.assertEqual(page.input_value("#save_email"), "me@gmail.com")
         self.drive(script)
@@ -1492,10 +1800,11 @@ class UITest(unittest.TestCase):
             self.assertIn("isn't available", page.text_content("#runMsg"))
             page.click("#tabNew")
             page.fill("#query", "x")
-            # Nothing here can say whether email works, so the block that needs
-            # it stays shut rather than offering a save that would go nowhere.
+            # Nothing here can say whether email works or whether anything would
+            # start a scheduled search, so the block that needs both stays shut
+            # rather than offering a save that would go nowhere.
             self.assertTrue(page.is_disabled("#saveSearch"))
-            self.assertFalse(page.is_hidden("#saveNeedsEmail"))
+            self.assertFalse(page.is_hidden("#saveBlocked"))
 
         self.errors = []
         settings_ui.collect_settings(

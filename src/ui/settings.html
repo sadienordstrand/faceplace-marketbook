@@ -17,6 +17,22 @@ __CSS__</style>
 </header>
 <main>
 __UPDATE_BAR__
+<!-- The wake queue running low, raised where it will be seen whichever tab the
+     window opens on. Same dress as the update offer, and like it, only ever
+     one thing to do about it. -->
+<section class="update" id="wakeBar" hidden>
+  <div class="updrow">
+    <div>
+      <div class="updlead" id="wakeLead">Wake-ups running low</div>
+      <div class="hint" id="wakeText"></div>
+    </div>
+    <div class="updacts">
+      <button class="mini" id="wakeLater">Not now</button>
+      <button class="mini" id="wakeRenew">Renew wake-ups</button>
+    </div>
+  </div>
+  <div class="note" id="wakeBarMsg" hidden></div>
+</section>
 <div class="pane" id="paneNew">
   <section>
     <h2>Search</h2>
@@ -160,9 +176,9 @@ __UPDATE_BAR__
       and this search will run itself, then email you what it found. It only
       fetches descriptions and photos for listings it hasn't seen before, so
       later runs are much quicker than the first one.</div>
-    <div class="blocked" id="saveNeedsEmail" hidden>
-      <p>Configure your email settings to run a scheduled search.</p>
-      <p><button class="mini" id="goEmail">Set up email</button></p>
+    <div class="blocked" id="saveBlocked" hidden>
+      <p id="saveBlockedWhy"></p>
+      <p><button class="mini" id="goEmail">Open Email &amp; Setup</button></p>
     </div>
     <div id="saveFields">
       <label class="field"><span class="lab">Name this search</span>
@@ -174,9 +190,11 @@ __UPDATE_BAR__
       <div class="lab">How often</div>
       <div class="every">
         <div class="num"><input type="number" id="save_every" value="1"
-                                min="1" step="1" inputmode="numeric"></div>
+                                min="1" step="1" inputmode="numeric">
+          <select id="save_every_hours" hidden></select></div>
         <div class="unit"><select id="save_unit"></select></div>
       </div>
+      <div class="hint" id="everyHint" hidden style="margin-top:8px"></div>
     </div>
     <div class="note" id="saveWarn" hidden></div>
     <div class="note" id="saveMsg" hidden></div>
@@ -192,8 +210,8 @@ __UPDATE_BAR__
     <div class="seclab"><h2>Scheduled searches</h2>
       <div class="grp"><button class="mini" id="refreshSaved">Refresh</button></div>
     </div>
-    <div class="blocked" id="savedNeedsEmail" hidden>
-      <p>Visit the <b>Email &amp; Setup</b> tab to enable scheduled searches.</p>
+    <div class="blocked" id="savedBlocked" hidden>
+      <p id="savedBlockedWhy"></p>
     </div>
     <div class="saved" id="savedList"></div>
     <div class="note" id="savedMsg" hidden></div>
@@ -224,6 +242,99 @@ __UPDATE_BAR__
       <button class="mini" id="schedOff">Turn off</button>
     </div>
     <div class="note" id="schedMsg" hidden></div>
+    <div class="schedstate" id="wakeRow" hidden style="margin-top:16px">
+      <span class="dot" id="wakeDot"></span>
+      <span class="lab" style="margin:0" id="wakeState"></span>
+      <button class="mini" id="renewWakes">Renew wake-ups</button>
+    </div>
+    <div class="hint" id="wakeHint" hidden style="margin-top:10px"></div>
+    <div class="note" id="wakeMsg" hidden></div>
+  </section>
+
+  <!-- Settings that belong to the computer rather than to this app, and that
+       decide whether a scheduled run finds it awake and willing. Only the set
+       for the computer this is, because the other one names menus that don't
+       exist here. -->
+  <section id="sysBlock" hidden>
+    <div class="sysheader">
+      <h2>Computer settings</h2>
+      <span class="osbadge" id="sysOs"></span>
+    </div>
+
+    <div class="sysgrp" id="sysMac" hidden>
+      <div class="sysrule rec">
+        <span class="tag">Recommended</span>
+        <span class="tagwhy">Scheduled searches will run more reliably if you
+          follow these steps.</span>
+      </div>
+      <div class="setting rec">
+        <div class="setname">Wake for network access</div>
+        <div class="setpath">System Settings → Battery → Options…</div>
+        <div class="hint">Set it to <b>Always</b>. This is what lets a sleeping
+          Mac wake itself up for a scheduled search. On <i>Only on Power
+          Adapter</i> — the usual default — a run that comes due while you're on
+          battery is skipped, and happens the next time the Mac is awake
+          instead. The report tells you when a run went out late.</div>
+      </div>
+
+      <div class="sysrule opt">
+        <span class="tag">Optional</span>
+      </div>
+      <div class="setting opt">
+        <div class="setname">Low Power Mode</div>
+        <div class="setpath">System Settings → Battery</div>
+        <div class="hint"><b>Never</b> is the safest setting, because Low Power
+          Mode can hold a scheduled run back. If you'd rather save battery,
+          <b>Only on Battery</b> still lets runs happen normally whenever you're
+          plugged in. Bear in mind that automated searches use up some battery
+          either way.</div>
+      </div>
+      <div class="setting opt">
+        <div class="setname">Leave the lid open</div>
+        <div class="hint">With the lid shut, a Mac laptop drops into a deeper
+          sleep that makes scheduled wake-ups unreliable, unless it's connected
+          to an external display. For overnight runs, leave it open and let the
+          screen turn itself off.</div>
+      </div>
+    </div>
+
+    <div class="sysgrp" id="sysWin" hidden>
+      <div class="sysrule rec">
+        <span class="tag">Recommended</span>
+        <span class="tagwhy">Scheduled searches will run more reliably if you
+          follow these steps.</span>
+      </div>
+      <div class="setting rec">
+        <div class="setname">Allow wake timers</div>
+        <div class="setpath">Control Panel → Hardware and Sound → Power Options
+          → Change plan settings → Change advanced power settings → Sleep →
+          Allow wake timers</div>
+        <div class="hint">Set both <b>On battery</b> and <b>Plugged in</b> to
+          <b>Enable</b>, then click OK. Until you do, Windows won't let a
+          scheduled search wake the computer, so runs only happen while you
+          already have it switched on.</div>
+      </div>
+      <div class="setting rec">
+        <div class="setname">Closing the lid</div>
+        <div class="setpath">Control Panel → Hardware and Sound → Power Options
+          → Choose what closing the lid does</div>
+        <div class="hint"><b>Sleep</b> and <b>Do nothing</b> both leave
+          scheduled runs able to happen. <b>Hibernate</b> and <b>Shut down</b>
+          don't — either one stops them until you turn the computer back on
+          yourself.</div>
+      </div>
+
+      <div class="sysrule opt">
+        <span class="tag">Optional</span>
+      </div>
+      <div class="setting opt">
+        <div class="setname">Battery saver</div>
+        <div class="setpath">Settings → System → Power &amp; battery</div>
+        <div class="hint">If Battery saver switches itself on at a high
+          percentage, a run that comes due while it's active may be
+          delayed.</div>
+      </div>
+    </div>
   </section>
 
   <section>
@@ -259,7 +370,6 @@ __UPDATE_BAR__
     <div class="acts" style="display:flex; gap:9px; margin-top:4px">
       <button class="mini" id="saveMail">Save</button>
       <button class="mini" id="testMail">Send a test email</button>
-      <button class="mini" id="backToSave" hidden>Back to your search</button>
     </div>
     <div class="note" id="mailMsg" hidden></div>
 

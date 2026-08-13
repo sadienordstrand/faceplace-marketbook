@@ -574,12 +574,26 @@ A scheduled search is a settings dict plus an interval, stored in
 launchd and Task Scheduler need a single entry point to call, and the runner, the
 schedule arithmetic and the report all have to agree about the same state files.
 
-**Email is a prerequisite, enforced as one.** A scheduled search's entire output is a
-message, so the `save_search` hook refuses outright while `email_ready()` is
-false, and the window is told at render time — `email_config` carries a `ready`
-flag — so the save block is shut before anything is typed into it rather than
-after. Email setup used to be a separate tab someone could simply not visit, and
-skipping it produced searches that ran on time, found things, and told nobody.
+**Email and automatic runs are both prerequisites, enforced as prerequisites.** A
+scheduled search's entire output is a message, and nothing but the schedule ever
+starts one, so `save_search` refuses outright while `email_ready()` is false or
+`scheduling_available()` is — and the window is told both at render time, from
+`email_config`'s `ready` flag and `schedule_state`'s, so the save block is shut
+before anything is typed into it rather than after. Each refusal names which half
+it was, so a window that has gone stale shuts the right block on the way past.
+
+Both were once a separate tab someone could simply not visit, and skipping either
+produced the same thing: a search that sat in the list looking scheduled. Without
+email it ran on time, found things, and told nobody; without automatic runs it
+never ran at all.
+
+`scheduling_available()` is not `schedule_installed()`. Installed and blocked —
+a task left pointing at the folder's old location, a scheduler that stopped
+checking in — reads as *on* everywhere else and runs nothing, so it fails this
+too. Systems that have no schedule to install are exempt rather than barred: with
+no launchd or Task Scheduler there is nothing to turn on, and saved searches are
+still worth having there, run by hand with `--run`, which is what the window and
+the save message both say.
 
 **Times are naive local wall clock.** A daily search means 5am the way a person
 means it, on both sides of a daylight-saving change, and the whole system runs on
@@ -588,8 +602,22 @@ measures from **`last_started`, not `last_finished`**, so a run that takes 40
 minutes doesn't ratchet the schedule forward. Two guards keep the arithmetic
 honest: a computed target is advanced until it's actually in the future, since a
 run that fired late must not leave the next one in the past where it would fire
-again immediately; and for hour-based intervals, fires that were slept through
-are skipped rather than queued.
+again immediately; and fires that were slept through are skipped rather than
+queued.
+
+**Hour intervals run on a fixed daily grid, not N hours from the last start.**
+`grid_hours()` anchors every hourly search at `DAILY_HOUR` and repeats every N
+hours after it — every 6 hours means 5am, 11am, 5pm and 11pm, the same times
+every day — and the window only offers counts that divide 24 (`HOUR_CHOICES`:
+3, 4, 6, 8, 12), so the grid really is identical from one day to the next. The
+reason is the wake queue below: waking a sleeping Mac takes one-off events
+written days in advance, which is only possible when the times are known days in
+advance, and a schedule measured from whenever the last run happened to start
+would drift away from any queue within a day. The grid also self-corrects: a
+run that reached its 5pm slot at 6:20 because the machine was asleep measures
+from when it actually started, and lands back on the same 11pm as every other
+day. A legacy count that doesn't divide 24 still gets a daily-repeating grid,
+with one short gap where the count wraps past midnight.
 
 ### Only positive evidence removes a listing
 
@@ -663,14 +691,44 @@ macOS gets a LaunchAgent with `StartInterval` for the tick, plus
 `pmset repeat wakeorpoweron` for a daily wake at 5am — launchd cannot wake a
 sleeping Mac on its own. `pmset` needs root, so installing runs it through
 osascript's administrator-privileges dialog; declining leaves the schedule
-working, just waiting for the machine to be awake. That daily wake is the only
-one that reliably exists, since `rearm_wake()`'s one-off wake for the next due
-run runs unattended, where its `sudo -n` can't prompt for a password.
+working, just waiting for the machine to be awake.
 
-Windows gets a scheduled task with `WakeToRun`, `StartWhenAvailable`, and
-`DisallowStartIfOnBatteries` false. One setting can't be automated: **Allow wake
-timers** defaults to disabled on battery, so `install_schedule()` returns that as
-a message for the UI to show.
+**Hourly searches need more wakes than `pmset repeat` can hold.** It stores
+exactly one repeating wake, and everything beyond that has to be a dated one-off
+`pmset schedule` event — root again, and consumed when it fires. Nothing can
+prompt for a password unattended, and the alternatives are all worse: a sudoers
+rule or a root daemon is exactly the "modifies system security settings"
+behaviour this app must never exhibit on someone else's machine. So the wake
+queue trades depth for authorization count: `renew_wakes()` writes every grid
+time for the next `WAKE_HORIZON_DAYS` (21) in one batch, under one password
+prompt, and the queue then runs down day by day. The batch goes through
+`_admin_shell()` — the lines land in a script file rather than an AppleScript
+string, because a hundred chained pmset calls through osascript's quoting is how
+injection bugs get written; `sudo -n` is tried first since cached credentials
+make it free. Each event carries `WAKE_OWNER` ("Faceplace Marketbook"), pmset's
+own mechanism for sharing the schedule: it makes ours recognisable in
+`pmset -g sched` (which needs no root to read), lets a rewrite cancel only ours,
+and leaves Apple's own alarms alone. The 5am slot is left out of the queue —
+the standing repeat already covers it, which is also the fallback: a queue that
+runs dry degrades to once a day at 5am plus whenever the machine is awake, never
+to nothing.
+
+Renewal rides along on moments that already justify a prompt — turning automatic
+runs on writes the repeat and the queue in one authorization, and saving,
+pausing or deleting an hourly search rewrites the queue only when the hours
+changed or the depth fell below `WAKE_RENEW_BELOW_DAYS` (7), so no prompt fires
+that a user didn't cause. Past that threshold — day 14 of 21 — the settings
+window raises a banner at open with a Renew button; from
+`WAKE_NAG_BELOW_DAYS` (3) — day 18 — the report emails say so too, because mail
+is the one channel guaranteed to reach someone whose machine runs unattended.
+The unprivileged tick can read the queue but never refill it, which is the whole
+reason the renewal has to pass through a human.
+
+Windows needs none of this: the scheduled task carries `WakeToRun`,
+`StartWhenAvailable`, and `DisallowStartIfOnBatteries` false, and Task Scheduler
+wakes the machine itself. One setting can't be automated: **Allow wake timers**
+defaults to disabled on battery, so `install_schedule()` returns that as a
+message for the UI to show.
 
 ### macOS hides Documents from launchd, silently
 

@@ -75,7 +75,8 @@ def open_link(url):
 
 
 def render(locations, paces, defaults, saved=(), email=None,
-           units=("hours", "days"), builtins=(), shortcut=None, update=None):
+           units=("hours", "days"), builtins=(), shortcut=None, update=None,
+           schedule=None):
     defaults = dict(defaults or {})
     # The update banner is three files of its own rather than lines added to the
     # three below, because it's a self-contained thing that either appears or
@@ -99,6 +100,7 @@ def render(locations, paces, defaults, saved=(), email=None,
             .replace("__PACES__", _json(paces))
             .replace("__SAVED__", _json(list(saved)))
             .replace("__EMAIL__", _json(email or {}))
+            .replace("__SCHEDULE__", _json(schedule or {}))
             .replace("__UNITS__", _json(list(units)))
             .replace("__DEFAULTS__", _json(defaults)))
 
@@ -127,6 +129,11 @@ def collect_settings(locations, paces, defaults=None, headless=False,
     html = render(locations, paces, defaults,
                   saved=_call(hooks, "list_searches", default={}).get("searches", []),
                   email=_call(hooks, "email_config", default={}),
+                  # Same reason as the email config: a scheduled search needs
+                  # automatic runs as well, and the block that says so is on the
+                  # tab the window opens on. Asked once here rather than when the
+                  # Email & Setup tab is first opened, which is far too late.
+                  schedule=_call(hooks, "schedule_state", default={}),
                   units=hooks.get("units") or ("hours", "days"),
                   builtins=builtins,
                   shortcut=_call(hooks, "shortcut_offer"),
@@ -218,6 +225,7 @@ def collect_settings(locations, paces, defaults=None, headless=False,
                 ("pyTestEmail", "test_email"),
                 ("pyScheduleState", "schedule_state"),
                 ("pySetSchedule", "set_schedule"),
+                ("pyRenewWakes", "renew_wakes"),
                 ("pyListRuns", "list_runs"),
                 ("pyOpenRun", "open_run"),
                 ("pyDeleteRun", "delete_run"),
