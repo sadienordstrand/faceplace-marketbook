@@ -260,14 +260,13 @@ __UPDATE_BAR__
       <h2>Computer settings</h2>
       <span class="osbadge" id="sysOs"></span>
     </div>
-
     <div class="sysgrp" id="sysMac" hidden>
       <div class="sysrule rec">
         <span class="tag">Recommended</span>
         <span class="tagwhy">Scheduled searches will run more reliably if you
           follow these steps.</span>
       </div>
-      <div class="setting rec">
+      <div class="setting rec" data-sys="mac_wake">
         <div class="setname">Wake for network access</div>
         <div class="setpath">System Settings → Battery → Options…</div>
         <div class="hint">Set it to <b>Always</b>. This is what lets a sleeping
@@ -280,7 +279,7 @@ __UPDATE_BAR__
       <div class="sysrule opt">
         <span class="tag">Optional</span>
       </div>
-      <div class="setting opt">
+      <div class="setting opt" data-sys="mac_lpm">
         <div class="setname">Low Power Mode</div>
         <div class="setpath">System Settings → Battery</div>
         <div class="hint"><b>Never</b> is the safest setting, because Low Power
@@ -289,7 +288,7 @@ __UPDATE_BAR__
           plugged in. Bear in mind that automated searches use up some battery
           either way.</div>
       </div>
-      <div class="setting opt">
+      <div class="setting opt" data-sys="mac_lid">
         <div class="setname">Leave the lid open</div>
         <div class="hint">With the lid shut, a Mac laptop drops into a deeper
           sleep that makes scheduled wake-ups unreliable, unless it's connected
@@ -304,7 +303,7 @@ __UPDATE_BAR__
         <span class="tagwhy">Scheduled searches will run more reliably if you
           follow these steps.</span>
       </div>
-      <div class="setting rec">
+      <div class="setting rec" data-sys="win_wake">
         <div class="setname">Allow wake timers</div>
         <div class="setpath">Control Panel → Hardware and Sound → Power Options
           → Change plan settings → Change advanced power settings → Sleep →
@@ -314,20 +313,19 @@ __UPDATE_BAR__
           scheduled search wake the computer, so runs only happen while you
           already have it switched on.</div>
       </div>
-      <div class="setting rec">
+      <div class="setting rec" data-sys="win_lid">
         <div class="setname">Closing the lid</div>
         <div class="setpath">Control Panel → Hardware and Sound → Power Options
           → Choose what closing the lid does</div>
-        <div class="hint"><b>Sleep</b> and <b>Do nothing</b> both leave
-          scheduled runs able to happen. <b>Hibernate</b> and <b>Shut down</b>
-          don't — either one stops them until you turn the computer back on
-          yourself.</div>
+        <div class="hint">Select <b>Sleep</b> or <b>Do nothing</b> to allow
+          scheduled runs to happen even when your computer has the lid
+          closed.</div>
       </div>
 
       <div class="sysrule opt">
         <span class="tag">Optional</span>
       </div>
-      <div class="setting opt">
+      <div class="setting opt" data-sys="win_saver">
         <div class="setname">Battery saver</div>
         <div class="setpath">Settings → System → Power &amp; battery</div>
         <div class="hint">If Battery saver switches itself on at a high
@@ -380,7 +378,7 @@ __UPDATE_BAR__
           <li>Go to <a href="https://myaccount.google.com/"><b>myaccount.google.com</b></a>
             and sign in.</li>
           <li>Open <b>Security & sign-in</b> in the left sidebar.</li>
-          <li>Turn on <b>2-Step Verification</b> if it isn't already. App
+          <li>Turn on <b>2-Step Verification</b> if it isn't already on. App
             passwords don't work without it.</li>
           <li>Use the search bar to find <b>App passwords</b> and open it.</li>
           <li>Type a name like <b>Faceplace Marketbook</b> and click <b>Create</b>.</li>

@@ -116,6 +116,7 @@ LATE_AFTER_HOURS = 2
 # accounts limited, so the UI warns past these but never refuses.
 SAFE_MIN_INTERVAL_HOURS = 6
 SAFE_MAX_SEARCHES = 3
+SAFE_MAX_QUERIES = 2
 
 # A lock older than this is assumed to belong to a process that died without
 # cleaning up. Longer than any real run: a wide multi-city sweep with
@@ -382,16 +383,16 @@ def interval_warnings(search, searches):
                   if s.get("enabled") and s.get("id") != search.get("id"))
     if enabled + 1 > SAFE_MAX_SEARCHES:
         out.append(
-            f"That would make {enabled + 1} active scheduled searches. Each one is a "
-            f"full sweep of every city you picked, so several of them multiply the "
-            f"traffic even on long intervals. Consider keeping fewer, or spacing "
-            f"them further apart.")
+            f"You already have {enabled} other active scheduled searches. Too "
+            f"much automated traffic on your Facebook account may raise the "
+            f"risk of it being limited or banned, so proceed with caution.")
     n = len(listings.query_list(search.get("queries") or search.get("query")))
-    if n > 1:
+    if n > SAFE_MAX_QUERIES:
         out.append(
-            f"This search has {n} queries, and every one of them is a separate "
-            f"sweep of every city — so it takes about {n} times as long, and puts "
-            f"that much more traffic on your Facebook account, each time it runs.")
+            f"This search has {n} queries, which means it takes about {n} times "
+            f"as long. Too much automated traffic on your Facebook account may "
+            f"raise the risk of it being limited or banned, so proceed with "
+            f"caution.")
     return out
 
 
@@ -586,15 +587,6 @@ def email_ready(cfg=None):
 # on whether an address exists, and it gets consulted by the test send.
 EMAIL_RE = re.compile(r"^[^@\s,;]+@[^@\s,;.]+(\.[^@\s,;.]+)+$")
 
-# Providers that expect the address to end this way. Google Workspace serves
-# custom domains from smtp.gmail.com, so a mismatch is worth a remark and not a
-# refusal.
-PROVIDER_DOMAINS = {
-    "gmail": ("gmail.com", "googlemail.com"),
-    "outlook": ("outlook.com", "hotmail.com", "live.com", "msn.com"),
-    "icloud": ("icloud.com", "me.com", "mac.com"),
-}
-
 
 def address_problem(value, what):
     """A refusal for something that cannot possibly work, or None."""
@@ -614,14 +606,7 @@ def email_remarks(cfg):
     """Things that are probably wrong but might not be, so they're said rather
     than enforced."""
     out = []
-    address = (cfg.get("address") or "").strip().lower()
     provider = cfg.get("provider") or "gmail"
-    domains = PROVIDER_DOMAINS.get(provider)
-    if address and domains and not address.endswith(tuple(f"@{d}" for d in domains)):
-        out.append(f"You picked {provider.title()} but {address} isn't "
-                   f"{' or '.join(domains)}. That's right for a work or school "
-                   f"account on {provider.title()}, and wrong otherwise — the "
-                   f"test send will tell you which.")
     # A Google app password is sixteen lowercase letters, shown in groups of four.
     # Checking the shape catches a normal password that happens to be 16 long.
     pw = (cfg.get("app_password") or "").replace(" ", "").replace("-", "")
@@ -642,8 +627,8 @@ def send_email(cfg, to, subject, text_body, html_body=None, attachments=(),
                timeout=120):
     """attachments is a sequence of (filename, bytes, subtype)."""
     if not email_ready(cfg):
-        raise RuntimeError("Email isn't set up yet — add your address and app "
-                           "password in the settings window.")
+        raise RuntimeError("Email isn't set up yet — add your email address and "
+                           "app password in the settings window.")
     to = (to or cfg["address"]).strip()
     msg = EmailMessage()
     msg["From"] = cfg["address"]
@@ -1152,10 +1137,9 @@ def build_report(search, summary, next_run=None, warnings=()):
                      f"{st.get('cards', 0)} seen")
         T.append("")
 
-    T.append("The attached files are stripped-down copies so they fit in an email, "
-             "and they open anywhere. For the full gallery, with every thumbnail, "
-             "open Faceplace Marketbook on the computer that ran this search and "
-             "go to the Past searches tab.")
+    T.append("The attached files contain stripped-down versions of the listings "
+             "in your search results. To view the full gallery, open Faceplace "
+             "Marketbook on your computer and go to the Past searches tab.")
     T.append("")
     if next_run:
         T.append(f"Next run: {fmt_when(next_run)}.")
@@ -1196,21 +1180,20 @@ def _gallery_html(summary, accent):
     path to hand.
     """
     foot = "color:#6b6b5e;font-size:13px;margin:0 0 8px"
-    attached = ("The attached files are stripped-down copies of the same "
-                "listings, and they open on any device.")
+    attached = ("The attached files contain stripped-down versions of the "
+                "listings in your search results. To view the full gallery, "
+                "open Faceplace Marketbook on your computer and go to the "
+                "<b>Past searches</b> tab")
     url = _file_url(summary.get("gallery"))
     if not url:
-        return (f'<p style="{foot}">{attached} For the full gallery, open '
-                f'Faceplace Marketbook on the computer that ran this search '
-                f'and go to the <b>Past searches</b> tab.</p>')
-    return (f'<p style="margin:0 0 12px"><a href="{_esc(url)}" '
+        return f'<p style="{foot}">{attached}.</p>'
+    return (f'<p style="{foot}">{attached}, or click the link below.</p>'
+            f'<p style="margin:0 0 4px"><a href="{_esc(url)}" '
             f'style="color:{accent};font-weight:700;text-decoration:none">'
             f'Open the full gallery &rarr;</a></p>'
-            f'<p style="{foot}">That opens the copy with every photo in it, on '
-            f'the computer that ran this search. Reading this anywhere else, or '
-            f'nothing happens when you click? {attached} You can also open '
-            f'Faceplace Marketbook on that computer and go to the '
-            f'<b>Past searches</b> tab.</p>')
+            f'<p style="color:{accent};font-size:13px;margin:0 0 12px">'
+            f'Note: the link will only work if you&rsquo;re on the computer '
+            f'that ran the search.</p>')
 
 
 def _searched_for_html(search):
@@ -1281,75 +1264,35 @@ open Faceplace Marketbook and go to the <b>Scheduled searches</b> tab.</p>
 
 
 # ---------- attachments ----------
-ATTACH_MAX_MB = 12
-# Base64 inflates an attachment by about a third and Gmail rejects messages over
-# 25 MB, so two files at the per-file limit would not fit together.
-COMBINED_MAX_MB = 22
-
-
-def _encoded_size(n_bytes):
-    return int(n_bytes * 4 / 3)
-
-
-def build_attachments(csv_path, new_ids, out_dir=None, per_file_mb=ATTACH_MAX_MB,
-                      combined_mb=COMBINED_MAX_MB):
+def build_attachments(csv_path, new_ids, out_dir=None):
     """Two stripped-down galleries: just this run's new listings, and everything
-    currently tracked. Thumbnails stay in only while the file still fits."""
+    currently tracked. Neither carries photos. Thumbnails are the whole reason a
+    report can grow big enough for a mail server to refuse it, and the gallery
+    with the photos in it is already on the computer that ran the search."""
     import build_gallery
     csv_path = Path(csv_path)
     out_dir = Path(out_dir) if out_dir else csv_path.parent
-    limit = per_file_mb * 1024 * 1024
     built = []
     for name, ids in (("new-listings.html", set(new_ids)),
                       ("all-results.html", None)):
         if ids is not None and not ids:
             continue
         path = out_dir / name
-        build_gallery.build(csv_path, path, embed=True, budget_mb=per_file_mb,
-                            only_ids=ids, quiet=True)
-        embedded = True
-        if path.stat().st_size > limit:
-            build_gallery.build(csv_path, path, embed=False, only_ids=ids,
-                                quiet=True)
-            embedded = False
-        built.append({"name": name, "path": path, "ids": ids,
-                      "embedded": embedded, "size": path.stat().st_size})
-
-    # If the pair still won't fit in one message, the full list gives up its
-    # thumbnails first: the complete gallery is already on disk, and the new
-    # listings are the part actually worth looking at on a phone.
-    def combined():
-        return sum(_encoded_size(b["size"]) for b in built)
-
-    for b in sorted(built, key=lambda b: b["name"] != "all-results.html"):
-        if combined() <= combined_mb * 1024 * 1024:
-            break
-        if not b["embedded"]:
-            continue
-        build_gallery.build(csv_path, b["path"], embed=False, only_ids=b["ids"],
+        build_gallery.build(csv_path, path, images=False, only_ids=ids,
                             quiet=True)
-        b["embedded"], b["size"] = False, b["path"].stat().st_size
-
+        built.append({"name": name, "path": path, "ids": ids,
+                      "size": path.stat().st_size})
     return [(b["name"], b["path"].read_bytes(), "html") for b in built], built
 
 
 # ---------- failure notices ----------
 REAUTH_STEPS = """What to do:
 
-  1. Open the Faceplace Marketbook folder on your computer and double-click
-     "Log into Facebook" — the .command file on a Mac, the .bat file on
-     Windows. It opens a browser window and searches nothing.
-  2. Log into Facebook by hand, including any two-factor code. Wait until you
-     can see your normal Facebook feed.
-  3. Check that the Marketplace search radius is still the distance you want.
-  4. That's it. The window closes itself and the next scheduled run will work.
-
-Logging into Facebook in Safari, Chrome or Edge will not fix this: the app keeps
-its own separate browser login, and that's the one that expired.
-
-Scheduled runs can't log in for you, because Facebook asks for a password and
-sometimes a code from your phone. Until you do the steps above, scheduled runs
-will keep stopping at this point."""
+Open the Faceplace Marketbook folder on your computer and double-click "Log into
+Facebook" — the .command file on a Mac, the .bat file on Windows. It opens
+Facebook in a browser window. Log into Facebook the way you normally would,
+including any two-factor code and captcha. You can close the window once you can
+see your normal Facebook feed, and your next scheduled run will work as usual."""
 
 
 def notify_failure(cfg, to, search, kind, detail, next_run=None):
@@ -1494,8 +1437,8 @@ def run_saved_search(search, email_cfg=None, sweep=None, send=True, now=None,
                 f"Your Marketplace search radius is set to about "
                 f"{round(km / 1.609)} miles, rather than the 500 Facebook "
                 f"allows, so this run only looked that far out from each city. "
-                f"If you wanted a wider net, open Faceplace Marketbook and "
-                f"raise the radius.")
+                f"If you wanted a wider net, log in to your Facebook account "
+                f"on your computer and raise the radius in Marketplace.")
         if summary.get("interrupted"):
             warnings.append(
                 "The run was stopped partway through, so some of the cities "
@@ -1510,14 +1453,15 @@ def run_saved_search(search, email_cfg=None, sweep=None, send=True, now=None,
             # gets announced before it happens rather than after.
             days = wakes.get("days_left") or 0
             warnings.append(
-                ("The wake-ups that let this Mac wake itself for hourly runs "
-                 f"cover only the next {days} day{'' if days == 1 else 's'}. "
+                ("The wake-ups that let this Mac wake itself for runs on an "
+                 "hours interval cover only the next "
+                 f"{days} day{'' if days == 1 else 's'}. "
                  if days else
-                 "The wake-ups that let this Mac wake itself for hourly runs "
-                 "have run out. ")
+                 "The wake-ups that let this Mac wake itself for runs on an "
+                 "hours interval have run out. ")
                 + "Open Faceplace Marketbook and renew them from the Email & "
-                  "Setup tab. Until then, hourly searches run once a day at "
-                  f"{DAILY_HOUR}am, and whenever the Mac is awake.")
+                  "Setup tab. Until then, hours-interval searches run once a "
+                  f"day at {DAILY_HOUR}am, and whenever the Mac is awake.")
         unknown = summary.get("unknown_cities") or []
         if unknown:
             # Silence here would be the worst outcome: the report would look
@@ -1548,8 +1492,7 @@ def run_saved_search(search, email_cfg=None, sweep=None, send=True, now=None,
                 summary["csv"], summary.get("new_ids") or [],
                 out_dir=summary["run_dir"])
             for b in built:
-                log(f"  {b['name']}: {b['size'] / 1e6:.1f} MB"
-                    f"{'' if b['embedded'] else ', thumbnails dropped to fit'}")
+                log(f"  {b['name']}: {b['size'] / 1e6:.1f} MB (no photos)")
             msg_id = send_email(email_cfg, to, subject, text, html, attachments)
             log(f"  emailed {to}")
             summary["message_id"] = msg_id
@@ -1823,15 +1766,13 @@ def renew_wakes(now=None, force=False):
     if fresh and not force:
         return False, None
     if not _admin_shell(_wake_lines(now)):
-        return False, ("The wake-up schedule wasn't updated — that's the step "
-                       "that needs your password. Without it, runs the Mac "
-                       "sleeps through happen at the next 5am wake-up, or "
-                       "whenever it's next awake. You can renew the wake-ups "
-                       "any time from the Email & Setup tab.")
+        return False, ("The wake-up schedule wasn't updated. You can renew the "
+                       "wake-ups any time from the Email & Setup tab.")
     state = wake_queue_state(now)
     if not state.get("until"):
         return True, None
-    return True, (f"Your Mac will wake itself for hourly runs through "
+    return True, (f"Your Mac will wake itself for runs that are scheduled on "
+                  f"hours intervals through "
                   f"{parse_iso(state['until']):%A, %B %-d} — "
                   f"{state['days_left']} days out. Opening this window now and "
                   f"then keeps that topped up.")
@@ -1857,7 +1798,7 @@ def permission_help():
     if folder:
         lines.append(
             f"macOS won't let a scheduled task read anything in your {folder} "
-            f"folder, and that's where this one lives. Automatic runs are set up "
+            f"folder, and that's where this app lives. Automatic runs are set up "
             f"but can't do anything yet.")
     else:
         lines.append("The scheduler started but couldn't reach this folder, so "
@@ -1909,11 +1850,10 @@ def set_wakes(now=None):
                 f"and run:\n"
                 f"    sudo pmset repeat wakeorpoweron MTWRFSU "
                 f"{DAILY_HOUR:02d}:00:00")
-    msg = f"Your Mac will wake itself at {DAILY_HOUR}am for daily searches"
+    msg = f"Your Mac will wake itself for searches scheduled multiple times a day"
     state = wake_queue_state(now)
     if state.get("relevant") and state.get("until"):
-        msg += (f", and at each hourly search's times through "
-                f"{parse_iso(state['until']):%A, %B %-d}.")
+        msg += (f"until {parse_iso(state['until']):%A, %B %-d}.")
     else:
         msg += "."
     return msg
@@ -1948,7 +1888,7 @@ def install_schedule(daily_wake=True, verify=True):
             if not reachable:
                 return False, permission_help()
         msgs.append(f"Scheduler installed; it checks for due searches every "
-                    f"{TICK_SECONDS // 60} minutes.")
+                    f"{TICK_SECONDS // 60} minutes while awake.")
         if daily_wake:
             msgs.append(set_wakes())
         return True, msgs
@@ -1965,12 +1905,6 @@ def install_schedule(daily_wake=True, verify=True):
         msgs.append(f"Scheduled task '{WIN_TASK}' created; it checks for due "
                     f"searches every {TICK_SECONDS // 60} minutes and may wake "
                     f"the computer.")
-        msgs.append("One setting Windows won't let us change for you: open "
-                    "Control Panel > Power Options > Change plan settings > "
-                    "Change advanced power settings > Sleep > Allow wake timers, "
-                    "and set it to Enable for both On battery and Plugged in. On "
-                    "battery it defaults to blocking wake timers, which would "
-                    "stop scheduled runs.")
         return True, msgs
 
     return False, ["Automatic runs are only set up for macOS and Windows."]
@@ -2036,14 +1970,15 @@ def uninstall_schedule():
         if not _admin_shell(["pmset repeat cancel"] + _cancel_lines()):
             msgs.append(f"The wake-ups couldn't be removed without your "
                         f"password. They're harmless on their own, and the "
-                        f"hourly ones expire by themselves within "
+                        f"hours-interval ones expire by themselves within "
                         f"{WAKE_HORIZON_DAYS} days; to remove the daily "
                         f"{DAILY_HOUR}am one, open Terminal and run:\n"
                         f"    sudo pmset repeat cancel")
         return True, msgs
     if system == "windows":
         _run(["schtasks", "/delete", "/tn", WIN_TASK, "/f"])
-        msgs.append("Automatic runs are off. Your scheduled searches are untouched.")
+        msgs.append("Automatic runs are off. Your scheduled searches are "
+                    "untouched — you can still run them by hand.")
         return True, msgs
     return False, ["Nothing to uninstall on this platform."]
 
@@ -2122,6 +2057,134 @@ def schedule_problems():
     return []
 
 
+# ---------- the computer's own power settings ----------
+# The Email & Setup tab lists the ones that affect whether a scheduled search
+# finds the machine asleep and willing. Anything already set the way we
+# recommend is left off the page, so the list isn't a to-do of finished work.
+# Reading is unprivileged (`pmset -g`, `powercfg /query`); a failure to read
+# leaves the item up rather than claiming a setting we couldn't see.
+
+# Setting cards the window can hide. mac_lid and win_saver stay, because there
+# is no preference to read for either.
+SYS_MAC_WAKE = "mac_wake"
+SYS_MAC_LPM = "mac_lpm"
+SYS_WIN_WAKE = "win_wake"
+SYS_WIN_LID = "win_lid"
+
+# powercfg GUIDs, so a localized Windows still answers. SUB_SLEEP / RTCWAKE
+# aliases are English-only on some builds.
+_WIN_SUB_SLEEP = "238c9fa8-0aad-41ed-83f4-97be242c8f20"
+_WIN_WAKE_TIMERS = "bd3b718a-0680-4d9d-8ab2-e1d2b4ac806d"
+_WIN_SUB_BUTTONS = "4f971e89-eebd-4455-a8de-9e59040e7347"
+_WIN_LID_ACTION = "5ca83367-6e45-459f-a27b-476b1d01c936"
+
+
+def computer_settings():
+    """Ids of setting cards that already match and should not be shown."""
+    system = os_name()
+    try:
+        if system == "darwin":
+            return _mac_settings_done()
+        if system == "windows":
+            return _win_settings_done()
+    except Exception:
+        return []
+    return []
+
+
+def _pmset_sections(text):
+    """`pmset -g custom` into {section name: {key: int}}."""
+    sections, name = {}, None
+    for raw in (text or "").splitlines():
+        line = raw.rstrip()
+        if not line:
+            continue
+        if not raw[:1].isspace() and line.endswith(":"):
+            name = line[:-1].strip()
+            sections[name] = {}
+            continue
+        if name is None:
+            continue
+        parts = line.split()
+        if len(parts) >= 2 and parts[-1].lstrip("-").isdigit():
+            sections[name][parts[0]] = int(parts[-1])
+    return sections
+
+
+def _pmset_flag(sections, key):
+    """(ac, battery) for one pmset key. Missing side is None."""
+    ac = (sections.get("AC Power") or {}).get(key)
+    battery = (sections.get("Battery Power") or {}).get(key)
+    return ac, battery
+
+
+def _mac_settings_done(text=None):
+    """Hide wake-for-network when it's Always, and Low Power Mode when it
+    isn't holding runs back on AC (Never, or Only on Battery)."""
+    if text is None:
+        r = _run(["pmset", "-g", "custom"], timeout=8)
+        if r.returncode != 0:
+            return []
+        text = r.stdout or ""
+    sections = _pmset_sections(text)
+    if not sections:
+        return []
+    hide = []
+    ac_womp, bat_womp = _pmset_flag(sections, "womp")
+    # Always: on both sources, or on AC when there's no battery.
+    if ac_womp == 1 and (bat_womp is None or bat_womp == 1):
+        hide.append(SYS_MAC_WAKE)
+    ac_lpm, _bat_lpm = _pmset_flag(sections, "lowpowermode")
+    if ac_lpm == 0:
+        hide.append(SYS_MAC_LPM)
+    return hide
+
+
+def _powercfg_indexes(text):
+    """Current AC and DC indexes from one powercfg /query block.
+
+    DC is None when the scheme has no battery side (a desktop). Hex or decimal
+    both appear; the GUIDs in the same dump are ignored by matching the labels.
+    """
+    ac = dc = None
+    for line in (text or "").splitlines():
+        low = line.strip().lower()
+        if "current ac power setting index" in low:
+            ac = int(low.rsplit(None, 1)[-1], 0)
+        elif "current dc power setting index" in low:
+            dc = int(low.rsplit(None, 1)[-1], 0)
+    return ac, dc
+
+
+def _win_query(subgroup, setting):
+    r = _run(["powercfg", "/query", "SCHEME_CURRENT", subgroup, setting],
+             timeout=8)
+    if r.returncode != 0:
+        return None
+    return r.stdout or ""
+
+
+def _win_settings_done(wake_text=None, lid_text=None):
+    """Hide wake timers when both sides are Enable, and the lid when both
+    sides are Sleep or Do nothing."""
+    hide = []
+    if wake_text is None:
+        wake_text = _win_query(_WIN_SUB_SLEEP, _WIN_WAKE_TIMERS)
+    if wake_text is not None:
+        ac, dc = _powercfg_indexes(wake_text)
+        # Enable is 1. 0 is Disable, 2 is Important wake timers only.
+        if ac == 1 and (dc is None or dc == 1):
+            hide.append(SYS_WIN_WAKE)
+    if lid_text is None:
+        lid_text = _win_query(_WIN_SUB_BUTTONS, _WIN_LID_ACTION)
+    if lid_text is not None:
+        ac, dc = _powercfg_indexes(lid_text)
+        # 0 Do nothing, 1 Sleep, 2 Hibernate, 3 Shut down.
+        if ac in (0, 1) and (dc is None or dc in (0, 1)):
+            hide.append(SYS_WIN_LID)
+    return hide
+
+
 # ---------- what the settings window calls ----------
 # Only these come from the search form. Anything else the form collects
 # (debug_dump) is about one interactive run and has no meaning for something
@@ -2190,16 +2253,12 @@ def ui_hooks():
         # nobody. That's what this used to do, and because the step that was
         # missed is two tabs away, nothing about the silence pointed back at it.
         if not email_ready():
-            return {"error": "Set your email up first, on the Email & Setup "
-                             "tab. A scheduled search reports what it found by "
-                             "email, so there's nothing for one to do until it "
-                             "can send you mail.",
+            return {"error": "Set up your email on the Email & Setup tab.",
                     "email_ready": False}
         # And no automatic runs means nothing ever starts it.
         if not scheduling_available():
-            return {"error": "Turn automatic runs on first, on the Email & Setup "
-                             "tab. Nothing would start this search until they "
-                             "are on and working.",
+            return {"error": "Turn automatic runs on first, on the Email & "
+                             "Setup tab.",
                     "schedule_ready": False}
         rec = _from_form(payload)
         editing = payload.get("id")
@@ -2277,19 +2336,20 @@ def ui_hooks():
         # says which of the two states it left behind rather than only the
         # happy one.
         if not email_ready(merged):
-            return {"error": "Saved, but there's no address and app password yet, "
-                             "so reports can't be sent.",
+            return {"error": "Saved, but there's no email address and app "
+                             "password yet, so reports can't be sent.",
                     "ready": False}
         note = (f"Saved. Reports will be sent from {merged['address']}, to "
-                f"whichever address each scheduled search asks for. Send a "
-                f"test message to be sure it works.")
+                f"whichever email address each scheduled search asks for. Send "
+                f"a test message to be sure it works.")
         return {"message": " ".join([note] + email_remarks(merged)),
                 "ready": True}
 
     def test_email():
         cfg = load_email_config()
         if not email_ready(cfg):
-            return {"error": "Add your address and app password first, then Save."}
+            return {"error": "Add your email address and app password first, "
+                             "then Save."}
         to = cfg["address"]
         try:
             send_email(cfg, to, "Faceplace Marketbook: test message",
@@ -2308,7 +2368,7 @@ def ui_hooks():
         elif installed:
             nxt = earliest_next_run()
             hint = (f"This computer checks for due searches every "
-                    f"{TICK_SECONDS // 60} minutes."
+                    f"{TICK_SECONDS // 60} minutes while awake."
                     + (f" The next one is due {fmt_when(nxt)}." if nxt else
                        " Nothing is scheduled yet."))
             beat = last_check_in()
@@ -2329,7 +2389,10 @@ def ui_hooks():
                 # What the hourly-interval dropdown offers and where its grid is
                 # anchored, so the page never invents its own copy of either.
                 "hour_choices": list(HOUR_CHOICES), "daily_hour": DAILY_HOUR,
-                "wakes": wake_queue_state()}
+                "wakes": wake_queue_state(),
+                # Setting cards already matching what we recommend, so the
+                # window can leave them off. See computer_settings().
+                "hide_settings": computer_settings()}
 
     def set_schedule(on):
         ok, msgs = install_schedule() if on else uninstall_schedule()
@@ -2381,14 +2444,14 @@ def _smtp_hint(e, cfg=None):
     happen into something a person can act on."""
     text = str(e)
     if isinstance(e, smtplib.SMTPAuthenticationError) or "5.7.8" in text:
-        address = (cfg or {}).get("address") or "your address"
+        address = (cfg or {}).get("address") or "your email address"
         return (f"the mail server wouldn't accept {address} with that password. "
                 f"For Gmail it has to be a 16-character app password, not your "
-                f"normal password — and check the address itself for a typo, "
-                f"because a wrong address fails the same way.")
+                f"normal password — and check the email address itself for a "
+                f"typo, because a wrong email address fails the same way.")
     if isinstance(e, (smtplib.SMTPRecipientsRefused, smtplib.SMTPSenderRefused)):
-        return (f"the mail server rejected one of the addresses ({text}). Check "
-                f"them for a typo.")
+        return (f"the mail server rejected one of the email addresses ({text}). "
+                f"Check them for a typo.")
     if isinstance(e, (OSError, smtplib.SMTPConnectError)):
         return f"couldn't reach the mail server ({text}). Check your connection."
     return text
@@ -2414,8 +2477,8 @@ def cmd_list():
 def cmd_test_email():
     cfg = load_email_config()
     if not email_ready(cfg):
-        raise SystemExit("Email isn't set up. Add your address and app password "
-                         "in the settings window first.")
+        raise SystemExit("Email isn't set up. Add your email address and app "
+                         "password in the settings window first.")
     to = cfg["address"]
     send_email(cfg, to, "Faceplace Marketbook: test message",
                "If you're reading this, scheduled reports will reach you.\n\n"

@@ -216,14 +216,6 @@
     background-size: 5px 5px, 5px 5px; background-repeat: no-repeat;
   }
   select:focus { outline: none; border-color: var(--accent); }
-  /* Every other control here shows its label in spaced-out capitals, so the
-     closed box does too. The list you open doesn't: a menu of shouted words is
-     harder to read than it looks, and on a Mac the list is drawn by the system
-     from the text as written, which is the behaviour this wants anyway. Saying
-     it on the options as well is for the platforms that draw the list
-     themselves. */
-  select { text-transform: uppercase; letter-spacing: .12em; }
-  option { text-transform: none; letter-spacing: normal; }
   .every { display: flex; gap: 12px; align-items: flex-start; }
   .every .num { flex: 0 0 110px; }
   .every .unit { flex: 0 0 190px; }

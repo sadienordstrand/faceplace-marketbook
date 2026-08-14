@@ -63,9 +63,14 @@ def embed_images(rows, base_dir, budget_mb=EMBED_BUDGET_MB):
 
 
 def build(csv_in, out=None, embed=True, budget_mb=EMBED_BUDGET_MB, only_ids=None,
-          quiet=False):
+          quiet=False, images=True):
     """only_ids limits the gallery to those item_ids, which is how the emailed
-    "just the new listings" attachment is built from the same CSV."""
+    "just the new listings" attachment is built from the same CSV.
+
+    images=False leaves the photos out altogether, which is what the emailed
+    attachments use. Dropping the image paths rather than only the embedding
+    matters: a path to a thumbnails/ folder the recipient hasn't got shows up as
+    "image expired", which reads as something having gone wrong."""
     src = Path(csv_in)
     with open(src, newline="", encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
@@ -79,7 +84,11 @@ def build(csv_in, out=None, embed=True, budget_mb=EMBED_BUDGET_MB, only_ids=None
             seen.add(iid)
             uniq.append(r)
     note = ""
-    if embed:
+    if not images:
+        for r in uniq:
+            r["image"] = ""
+        note = ", no photos"
+    elif embed:
         done, skipped, used = embed_images(uniq, src.resolve().parent, budget_mb)
         note = f", {done} images baked in ({used / 1e6:.1f} MB)"
         if skipped:

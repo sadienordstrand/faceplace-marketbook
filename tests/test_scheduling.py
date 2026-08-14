@@ -373,11 +373,14 @@ class TestSavedSearchCRUD(Redirected):
         self.assertEqual(sc.load_searches()[0]["query"], "defender 90")
 
     def test_a_search_with_several_queries_says_it_costs_more(self):
-        rec = self.make(name="Both", queries=["defender 110", "land rover 90"])
+        rec = self.make(name="Three", queries=["defender 110", "land rover 90",
+                                               "series iii"])
         warnings = " ".join(sc.interval_warnings(rec, sc.load_searches()))
-        self.assertIn("2 queries", warnings)
-        self.assertNotIn("queries", " ".join(
-            sc.interval_warnings(self.make(name="One"), sc.load_searches())))
+        self.assertIn("3 queries", warnings)
+        # Two is common enough not to be worth a warning of its own.
+        self.assertNotIn("queries", " ".join(sc.interval_warnings(
+            self.make(name="Both", queries=["defender 110", "land rover 90"]),
+            sc.load_searches())))
 
 
 class TestSafetyWarnings(Redirected):
@@ -989,7 +992,7 @@ class TestReport(unittest.TestCase):
         for body in (text, html):
             self.assertIn("Past searches", body)
             self.assertIn("Faceplace Marketbook", body)
-        self.assertIn("stripped-down copies", text)
+        self.assertIn("stripped-down versions", text)
         self.assertNotIn("runs/saved/defender_110", text)
 
     def test_nothing_removed_says_so_explicitly(self):
@@ -1122,7 +1125,8 @@ class TestGalleryLink(unittest.TestCase):
         # The graceful failure: the link does nothing away from that computer,
         # so the same email has to carry a copy that opens anywhere.
         for kw in ({}, {"gallery": None}, {"gallery": "results/gallery.html"}):
-            self.assertIn("open on any device", self.html(**kw))
+            self.assertIn("The attached files contain stripped-down versions",
+                          self.html(**kw))
 
     def test_the_link_is_the_one_the_app_itself_would_open(self):
         # past_runs opens a gallery with the same file:// form; if the two ever
@@ -1185,53 +1189,13 @@ class TestAttachments(unittest.TestCase):
         attachments, _ = sc.build_attachments(csv_path, [])
         self.assertEqual([a[0] for a in attachments], ["all-results.html"])
 
-    def embedded_thumbs(self, name):
-        # The gallery template has its own data:image/svg+xml grain texture, so
-        # look for the jpeg data URIs a baked-in thumbnail actually produces.
-        return "data:image/jpeg;base64" in (self.dir / name).read_text()
-
-    def test_small_files_keep_their_thumbnails(self):
+    def test_thumbnails_are_never_included(self):
         csv_path = self.build_csv(n=4, image_bytes=2000)
-        _, built = sc.build_attachments(csv_path, ["i0"], per_file_mb=1,
-                                        combined_mb=2)
-        self.assertTrue(all(b["embedded"] for b in built))
-        self.assertTrue(self.embedded_thumbs("all-results.html"))
-
-    def test_a_file_over_the_per_file_limit_drops_its_thumbnails(self):
-        # 8 x 200 KB of images against a 1 MB ceiling.
-        csv_path = self.build_csv(n=8, image_bytes=200_000)
-        _, built = sc.build_attachments(csv_path, ["i0"], per_file_mb=1,
-                                        combined_mb=99)
-        full = [b for b in built if b["name"] == "all-results.html"][0]
-        self.assertFalse(full["embedded"])
-        self.assertLess(full["size"], 1024 * 1024)
-        self.assertFalse(self.embedded_thumbs("all-results.html"))
-
-    def test_the_per_file_limit_is_judged_per_file(self):
-        # The new-listings file is one small listing, so it keeps its thumbnail
-        # even though the full file cannot.
-        csv_path = self.build_csv(n=8, image_bytes=200_000)
-        _, built = sc.build_attachments(csv_path, ["i0"], per_file_mb=1,
-                                        combined_mb=99)
-        by_name = {b["name"]: b for b in built}
-        self.assertTrue(by_name["new-listings.html"]["embedded"])
-        self.assertFalse(by_name["all-results.html"]["embedded"])
-
-    def test_the_full_file_gives_up_thumbnails_first_for_the_combined_limit(self):
-        # Each file fits on its own, but together they exceed what one message
-        # can carry once base64 has inflated them.
-        csv_path = self.build_csv(n=6, image_bytes=120_000)
-        _, built = sc.build_attachments(csv_path, [f"i{i}" for i in range(6)],
-                                        per_file_mb=2, combined_mb=1)
-        by_name = {b["name"]: b for b in built}
-        self.assertFalse(by_name["all-results.html"]["embedded"])
-
-    def test_the_real_defaults_are_what_was_asked_for(self):
-        self.assertEqual(sc.ATTACH_MAX_MB, 12)
-        self.assertLess(sc.COMBINED_MAX_MB, 25)
-
-    def test_base64_inflation_is_accounted_for(self):
-        self.assertGreater(sc._encoded_size(3_000_000), 3_900_000)
+        attachments, _ = sc.build_attachments(csv_path, ["i0"])
+        for name, data, _ in attachments:
+            html = data.decode("utf-8")
+            self.assertNotIn("data:image/jpeg;base64", html, name)
+            self.assertNotIn("thumbnails/", html, name)
 
 
 # ------------------------------------------------------- what stays, what goes
@@ -1582,13 +1546,13 @@ class TestWakeQueue(Redirected):
         self.assertTrue(all(l.startswith("pmset schedule cancel")
                             for l in self.ran[-1]))
 
-    def test_a_declined_password_prompt_says_what_still_works(self):
+    def test_a_declined_password_prompt_says_where_to_try_again(self):
         self.hourly(12)
         self.allow = False
         changed, note = sc.renew_wakes()
         self.assertFalse(changed)
-        self.assertIn("password", note)
-        self.assertIn("5am", note)
+        self.assertIn("wasn't updated", note)
+        self.assertIn("Email & Setup", note)
 
     # ---- the moments that rewrite it
     def test_saving_an_hourly_search_renews_the_queue_and_says_so(self):
@@ -1624,7 +1588,7 @@ class TestWakeQueue(Redirected):
             {**TestSavingNeedsEmail.FORM,
              "interval": {"every": 6, "unit": "hours"}})
         self.assertNotIn("error", res)
-        self.assertIn("password", res["message"])
+        self.assertIn("wake-up schedule wasn't updated", res["message"])
         self.assertEqual(len(sc.load_searches()), 1)
 
     def test_pausing_the_search_cleans_the_queue_up(self):
@@ -1786,12 +1750,15 @@ class TestSending(Redirected):
                      "app_password": "abcdefghijklmnop"})
                 self.assertNotIn("error", res)
 
-    def test_a_domain_that_doesnt_match_the_provider_is_remarked_on(self):
+    def test_a_domain_that_doesnt_match_the_provider_is_left_alone(self):
+        # Work and school accounts on Google Workspace are served from
+        # smtp.gmail.com under their own domain, and they're common enough that
+        # the test send is a better answer than a remark.
         res = sc.ui_hooks()["save_email"](
             {"provider": "gmail", "address": "me@company.com",
              "app_password": "abcdefghijklmnop"})
         self.assertNotIn("error", res)
-        self.assertIn("work or school", res["message"])
+        self.assertNotIn("company.com isn't", res["message"])
 
     def test_a_normal_password_is_remarked_on(self):
         # "my-real-password" is itself sixteen characters, so length alone would
@@ -1881,8 +1848,8 @@ class TestSending(Redirected):
         body = RecordingSMTP.sent[0].get_body(("plain",)).get_content()
         self.assertIn("log into Facebook again",
                       RecordingSMTP.sent[0]["Subject"])
-        self.assertIn("Log into Facebook by hand", body)
-        self.assertIn("search radius", body)
+        self.assertIn("Log into Facebook the way you normally would", body)
+        self.assertIn("two-factor code and captcha", body)
         self.assertIn("Next attempt", body)
 
     def test_error_notices_say_the_search_is_still_scheduled(self):
@@ -2294,7 +2261,7 @@ class TestScheduledPipeline(Redirected):
         self.assertEqual(len(RecordingSMTP.sent), 1)
         self.assertIn("log into Facebook again", RecordingSMTP.sent[0]["Subject"])
         body = RecordingSMTP.sent[0].get_body(("plain",)).get_content()
-        self.assertIn("Log into Facebook by hand", body)
+        self.assertIn("Log into Facebook the way you normally would", body)
 
     def test_an_unexpected_error_emails_and_leaves_the_search_scheduled(self):
         rec = self.make()
@@ -2864,6 +2831,104 @@ class TestScheduleProblems(unittest.TestCase):
             {"pid": os.getpid(), "what": "scheduled run",
              "started": sc.iso(sc.now_local())}), encoding="utf-8")
         self.assertEqual(sc.schedule_problems(), [])
+
+
+class TestComputerSettings(unittest.TestCase):
+    """Which Email & Setup cards to hide, from pmset / powercfg dumps."""
+
+    PMSET_ADAPTER_ONLY = """\
+Battery Power:
+ womp                 0
+ lowpowermode         0
+AC Power:
+ womp                 1
+ lowpowermode         0
+"""
+    PMSET_ALWAYS = """\
+Battery Power:
+ womp                 1
+ lowpowermode         0
+AC Power:
+ womp                 1
+ lowpowermode         0
+"""
+    PMSET_DESKTOP = """\
+AC Power:
+ womp                 1
+ lowpowermode         0
+"""
+    PMSET_LPM_ALWAYS = """\
+Battery Power:
+ womp                 1
+ lowpowermode         1
+AC Power:
+ womp                 1
+ lowpowermode         1
+"""
+
+    def test_only_on_power_adapter_keeps_the_wake_card(self):
+        self.assertEqual(sc._mac_settings_done(self.PMSET_ADAPTER_ONLY),
+                         [sc.SYS_MAC_LPM])
+
+    def test_always_hides_wake_and_low_power_mode(self):
+        self.assertEqual(sc._mac_settings_done(self.PMSET_ALWAYS),
+                         [sc.SYS_MAC_WAKE, sc.SYS_MAC_LPM])
+
+    def test_a_desktop_with_womp_on_is_treated_as_always(self):
+        self.assertEqual(sc._mac_settings_done(self.PMSET_DESKTOP),
+                         [sc.SYS_MAC_WAKE, sc.SYS_MAC_LPM])
+
+    def test_low_power_mode_on_ac_is_left_on_the_page(self):
+        self.assertEqual(sc._mac_settings_done(self.PMSET_LPM_ALWAYS),
+                         [sc.SYS_MAC_WAKE])
+
+    def test_unreadable_pmset_hides_nothing(self):
+        self.assertEqual(sc._mac_settings_done(""), [])
+        self.assertEqual(sc._mac_settings_done("not a dump"), [])
+
+    WAKE_BOTH = """\
+Power Setting GUID: bd3b718a-0680-4d9d-8ab2-e1d2b4ac806d  (Allow wake timers)
+Current AC Power Setting Index: 0x00000001
+Current DC Power Setting Index: 0x00000001
+"""
+    WAKE_DC_OFF = """\
+Current AC Power Setting Index: 0x00000001
+Current DC Power Setting Index: 0x00000000
+"""
+    WAKE_IMPORTANT_ONLY = """\
+Current AC Power Setting Index: 0x00000002
+Current DC Power Setting Index: 0x00000002
+"""
+    LID_SLEEP = """\
+Current AC Power Setting Index: 0x00000001
+Current DC Power Setting Index: 0x00000000
+"""
+    LID_HIBERNATE = """\
+Current AC Power Setting Index: 0x00000002
+Current DC Power Setting Index: 0x00000001
+"""
+
+    def test_wake_timers_enabled_on_both_sides_are_hidden(self):
+        self.assertEqual(
+            sc._win_settings_done(self.WAKE_BOTH, self.LID_HIBERNATE),
+            [sc.SYS_WIN_WAKE])
+
+    def test_wake_timers_off_on_battery_stay_on_the_page(self):
+        self.assertEqual(
+            sc._win_settings_done(self.WAKE_DC_OFF, self.LID_SLEEP),
+            [sc.SYS_WIN_LID])
+
+    def test_important_wake_timers_only_is_not_enable(self):
+        self.assertEqual(
+            sc._win_settings_done(self.WAKE_IMPORTANT_ONLY, self.LID_SLEEP),
+            [sc.SYS_WIN_LID])
+
+    def test_a_lid_set_to_hibernate_stays_on_the_page(self):
+        self.assertNotIn(sc.SYS_WIN_LID, sc._win_settings_done(
+            self.WAKE_DC_OFF, self.LID_HIBERNATE))
+
+    def test_unreadable_powercfg_hides_nothing(self):
+        self.assertEqual(sc._win_settings_done("", ""), [])
 
 
 if __name__ == "__main__":

@@ -84,6 +84,11 @@ class UITest(unittest.TestCase):
                       "_admin_shell": sc._admin_shell}
         sc.scheduled_wakes = lambda: []
         sc._admin_shell = lambda lines: True
+        # Don't read this machine's power settings: tests that care about which
+        # cards are showing pass their own list, and the rest want every card
+        # present so the markup can be checked.
+        self._computer = sc.computer_settings
+        sc.computer_settings = lambda: []
         # A link in the window opens the everyday browser, which no test may
         # actually do; what would have opened is recorded instead.
         self.opened = []
@@ -98,6 +103,7 @@ class UITest(unittest.TestCase):
         sc.install_schedule = self._install
         for k, v in self._wake.items():
             setattr(sc, k, v)
+        sc.computer_settings = self._computer
         settings_ui.open_link = self._open_link
         for k, v in self._saved.items():
             setattr(sc, k, v)
@@ -314,21 +320,20 @@ class UITest(unittest.TestCase):
             self.assertEqual(self.unit_labels(page), ["hours", "days"])
         self.drive(script)
 
-    def test_a_dropdown_shouts_its_choice_and_writes_its_list_plainly(self):
-        # The chosen one sits among controls that are all capitals, so it
-        # matches them; the list that drops down is prose, and reads better as
-        # prose. The text itself stays as written, and the capitals are put on
-        # by the box, which is the only part of a menu CSS can be sure of.
+    def test_dropdowns_show_their_labels_as_written(self):
+        # text-transform on <select> also capitalises the open list in
+        # Chromium, so the labels are written the way they should read.
         def script(page):
+            self.assertEqual(self.unit_labels(page), ["hour", "day"])
             page.click("#tabEmail")
-            case = page.eval_on_selector(
-                "#mail_provider",
-                "el => [getComputedStyle(el).textTransform,"
-                " getComputedStyle(el.options[0]).textTransform]")
-            self.assertEqual(case, ["uppercase", "none"])
             self.assertEqual(
-                page.eval_on_selector("#mail_provider option", "el => el.textContent"),
-                "Gmail")
+                page.eval_on_selector_all(
+                    "#mail_provider option", "els => els.map(e => e.textContent)"),
+                ["Gmail", "Outlook", "iCloud", "Other (set server below)"])
+            self.assertNotEqual(
+                page.eval_on_selector(
+                    "#mail_provider", "el => getComputedStyle(el).textTransform"),
+                "uppercase")
         self.drive(script)
 
     def test_editing_a_search_relabels_the_units_for_its_interval(self):
@@ -976,7 +981,7 @@ class UITest(unittest.TestCase):
             self.assertNotIn("system settings", text)
         self.drive(script)
 
-    def test_the_settings_worth_doing_are_marked_apart_from_the_rest(self):
+    def test_the_mac_settings_tell_recommended_apart_from_optional(self):
         # The whole point of the section: what keeps runs on time has to be
         # distinguishable at a glance from what merely tidies up around them.
         self.pretend("darwin")
@@ -1021,6 +1026,63 @@ class UITest(unittest.TestCase):
                     "#sysWin .setting.opt .setname",
                     "els => els.map(e => e.textContent)"),
                 ["Battery saver"])
+        self.drive(script)
+
+    def test_a_setting_already_matching_is_left_off_the_page(self):
+        self.pretend("darwin")
+        sc.computer_settings = lambda: ["mac_wake", "mac_lpm"]
+
+        def script(page):
+            page.click("#tabEmail")
+            page.wait_for_selector("#sysBlock:not([hidden])")
+            self.assertTrue(page.is_hidden('[data-sys="mac_wake"]'))
+            self.assertTrue(page.is_hidden('[data-sys="mac_lpm"]'))
+            self.assertFalse(page.is_hidden('[data-sys="mac_lid"]'))
+            # The Recommended heading goes with its last card, so it isn't
+            # left sitting over nothing.
+            self.assertTrue(page.is_hidden("#sysMac .sysrule.rec"))
+            self.assertFalse(page.is_hidden("#sysMac .sysrule.opt"))
+            text = page.inner_text("#sysBlock").lower()
+            self.assertNotIn("wake for network access", text)
+            self.assertNotIn("recommended", text)
+            self.assertIn("leave the lid open", text)
+            self.assertIn("optional", text)
+        self.drive(script)
+
+    def test_the_section_stays_when_only_the_unreadables_remain(self):
+        # Battery saver and the lid aren't checked, so they keep the section
+        # on the page even after every readable setting already matches.
+        self.pretend("windows")
+        sc.computer_settings = lambda: ["win_wake", "win_lid"]
+
+        def script(page):
+            page.click("#tabEmail")
+            page.wait_for_selector("#sysBlock:not([hidden])")
+            self.assertTrue(page.is_hidden('[data-sys="win_wake"]'))
+            self.assertTrue(page.is_hidden('[data-sys="win_lid"]'))
+            self.assertFalse(page.is_hidden('[data-sys="win_saver"]'))
+            self.assertTrue(page.is_hidden("#sysWin .sysrule.rec"))
+            self.assertFalse(page.is_hidden("#sysWin .sysrule.opt"))
+        self.drive(script)
+
+    def test_opening_the_email_tab_reads_the_settings_again(self):
+        # So a change made in System Settings shows up without closing the
+        # window: leave Email & Setup and come back.
+        self.pretend("darwin")
+        hide = []
+        sc.computer_settings = lambda: list(hide)
+
+        def script(page):
+            page.click("#tabEmail")
+            page.wait_for_selector("#sysBlock:not([hidden])")
+            self.assertFalse(page.is_hidden('[data-sys="mac_wake"]'))
+            hide.append("mac_wake")
+            page.click("#tabNew")
+            page.click("#tabEmail")
+            page.wait_for_function(
+                """() => document.querySelector('[data-sys="mac_wake"]').hidden""")
+            self.assertTrue(page.is_hidden('[data-sys="mac_wake"]'))
+            self.assertTrue(page.is_hidden("#sysMac .sysrule.rec"))
         self.drive(script)
 
     def test_a_computer_with_no_automatic_runs_is_told_nothing_about_them(self):
@@ -1403,7 +1465,7 @@ class UITest(unittest.TestCase):
             page.wait_for_selector("#renewWakes")
             page.click("#renewWakes")
             page.wait_for_selector("#wakeMsg:not([hidden])")
-            self.assertIn("password", page.text_content("#wakeMsg"))
+            self.assertIn("wasn't updated", page.text_content("#wakeMsg"))
         self.drive(script)
 
     def test_a_save_refused_by_python_shuts_the_block_the_window_left_open(self):
@@ -1822,18 +1884,16 @@ class UpdateBanner(unittest.TestCase):
     """The offer of a newer version, which most launches never show at all.
 
     Its own class rather than another UITest: the banner needs none of the
-    saved-search plumbing, and driving it with only its three hooks also proves
+    saved-search plumbing, and driving it with only its two hooks also proves
     it doesn't quietly depend on the rest of the window being wired up.
     """
 
     OFFER = {"show": True, "version": "1.3.0", "current": "1.0.0"}
 
     def drive(self, script, offer=None, answer=None):
-        self.waved_off = []
         self.errors = []
         hooks = {
             "update_offer": lambda: offer or {"show": False},
-            "update_skip": lambda v: self.waved_off.append(v) or {"ok": True},
             "update_now": lambda: answer or {
                 "ok": True, "version": "1.3.0", "notes": [],
                 "message": "Updated to 1.3.0."},
@@ -1877,13 +1937,14 @@ class UpdateBanner(unittest.TestCase):
                                   "current": "1.0.0"})
         self.assertEqual(seen[0], seen[1])
 
-    def test_not_now_puts_it_away_and_says_which_one_was_waved_off(self):
+    def test_not_now_puts_it_away_for_this_window_only(self):
+        # Nothing is written down, so the same version is offered again the next
+        # time the app starts.
         def script(page):
             page.wait_for_selector("#updateBar:visible")
             page.click("#updSkip")
             page.wait_for_selector("#updateBar", state="hidden")
         self.drive(script, offer=self.OFFER)
-        self.assertEqual(self.waved_off, ["1.3.0"])
 
     def test_an_update_that_lands_blocks_the_rest_of_the_window(self):
         # The code on disk is now newer than the code already running, so there

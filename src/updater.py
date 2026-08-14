@@ -16,7 +16,7 @@ runs/, both of which this never touches — so updating keeps the login, the
 history, and any desktop shortcut pointing at this folder.
 
   version.py     the number this copy is at, and the one the repository is at
-  .state/update.json   when we last asked, what the answer was, what was skipped
+  .state/update.json   when we last asked and what the answer was
 
 The check runs on every launch and swallows every error. On a working connection
 it costs about a third of a second; on a broken one it costs CHECK_TIMEOUT and
@@ -277,15 +277,7 @@ def available(force=False):
         return {"show": False, "why": "ahead", **found}
     if not is_newer(newest, __version__):
         return {"show": False, "why": "current", **found}
-    if not force and load_state().get("skipped") == newest:
-        return {"show": False, "why": "skipped", **found}
     return {"show": True, "why": "newer", **found}
-
-
-def skip(version):
-    """'Not now' — stay quiet about this particular version."""
-    save_state(skipped=version)
-    return {"ok": True}
 
 
 # --- Fetching and checking the new copy --------------------------------------
@@ -589,7 +581,7 @@ def _download_and_install(restart):
     except OSError as e:
         return {"error": f"The update was put back the way it was, because a "
                          f"file couldn't be written: {e.strerror or e}."}
-    save_state(latest=version, skipped=None,
+    save_state(latest=version,
                installed=datetime.now().isoformat(timespec="seconds"))
     # Three endings, because there are three different things about to happen.
     # A note means something didn't go quite to plan and is worth reading, so
@@ -623,9 +615,6 @@ def news(offer):
                 f"minutes can take that long to show up here.{old}")
     if offer.get("why") == "current":
         return f"up to date. This is version {current}.{old}"
-    if offer.get("why") == "skipped":
-        return (f"version {version} is available, and you set that one aside, "
-                f"so the window won't ask about it again.{old}")
     return f"version {version} is available. This is {current}.{old}"
 
 
@@ -665,8 +654,7 @@ def announce():
 def ui_hooks():
     """What the settings window needs to offer the update and then do it."""
     return {"update_offer": available,
-            "update_now": update_now,
-            "update_skip": skip}
+            "update_now": update_now}
 
 
 def main(argv=None):

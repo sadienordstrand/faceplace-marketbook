@@ -81,7 +81,7 @@ exec open -a Terminal "$launcher"
 MAC_MISSING_MESSAGE = (
     "This icon can no longer find the Faceplace Marketbook folder, which has "
     "been moved, renamed or deleted. Move this icon to the Trash, then start "
-    "the app from the folder and it will offer you a new one."
+    "the app from the folder and it will offer to create you a new shortcut."
 )
 
 # The Dock's own preference format. _CFURLStringType 0 means the string is a
@@ -413,9 +413,9 @@ def add_mac(place_ids):
             made["dock"] = app
         else:
             trouble.append(
-                "macOS didn't keep the Dock entry, which it sometimes won't. "
-                f"The app itself is in your Applications folder — open that and "
-                f"drag {APP_NAME} onto the Dock to finish the job.")
+                f"macOS refused to create the Dock shortcut. To do it manually, "
+                f"find {APP_NAME} in your Applications folder and drag it onto "
+                f"the Dock.")
     return made, trouble
 
 

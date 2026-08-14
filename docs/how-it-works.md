@@ -658,11 +658,10 @@ wall — and sends one email rather than one each.
 
 Reports go out over SMTP with the user's own app password, carrying two HTML
 galleries: this run's new listings, and everything tracked.
-`build_attachments()` budgets them — each re-renders without embedded thumbnails
-if it exceeds `ATTACH_MAX_MB` (12), and if the pair still won't fit in
-`COMBINED_MAX_MB` (22), the full gallery gives up its thumbnails first, since the
-complete version is already on disk and the new listings are the part worth
-looking at on a phone. Only Gmail's host is special-cased by name;
+`build_attachments()` builds both with `images=False`, so neither carries
+photos. Thumbnails are what make a report big enough for a mail server to
+refuse, and the gallery with the photos in it is already on the computer that
+ran the search. Only Gmail's host is special-cased by name;
 `smtp_target()` falls back to a user-supplied host and port.
 
 **The link to the real gallery is written to survive not working.**
@@ -886,7 +885,7 @@ letting someone start a sweep on half of each version.
 
 `tests/test_scheduling.py` covers the interval arithmetic including
 daylight-saving and late-run cases, the classifier, the reconciliation rule, the
-attachment budgets, message construction through a recording `smtplib.SMTP`, and
+attachments, message construction through a recording `smtplib.SMTP`, and
 the lock — including a real second process, since single-process mutual exclusion
 would prove nothing about the case that matters. `run_saved_search()` takes an
 injectable `sweep`, so the whole pipeline is exercised without a browser.

@@ -231,8 +231,7 @@ def collect_settings(locations, paces, defaults=None, headless=False,
                 ("pyDeleteRun", "delete_run"),
                 ("pyAddShortcut", "add_shortcut"),
                 ("pyShortcutNever", "shortcut_never"),
-                ("pyUpdateNow", "update_now"),
-                ("pyUpdateSkip", "update_skip")):
+                ("pyUpdateNow", "update_now")):
             page.expose_function(js_name, hook(hook_name))
         page.set_content(html)
         if on_ready:

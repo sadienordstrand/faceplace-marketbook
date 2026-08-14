@@ -217,11 +217,13 @@ class Offering(Redirected):
     def test_the_newest_version_says_nothing(self):
         self.assertFalse(self.offer("1.0.0")["show"])
 
-    def test_one_that_was_waved_away_stays_quiet(self):
-        updater.skip("1.1.0")
-        self.assertFalse(self.offer("1.1.0")["show"])
-        # Only that one. The next release is still worth mentioning.
-        self.assertTrue(self.offer("1.2.0")["show"])
+    def test_the_same_version_is_offered_again_on_the_next_launch(self):
+        # "Not now" hides the banner for that window only. Nothing about the
+        # refusal is written down, so putting an update off doesn't quietly
+        # become never taking it.
+        self.assertTrue(self.offer("1.1.0")["show"])
+        self.assertTrue(self.offer("1.1.0")["show"])
+        self.assertNotIn("skipped", updater.load_state())
 
     def test_a_clone_is_left_alone(self):
         (self.root / ".git").mkdir()
@@ -393,8 +395,6 @@ class Reporting(Redirected):
         self.assertTrue(answer["ok"])
         self.assertEqual(answer["version"], "2.0.0")
         self.assertIn("2.0.0", answer["message"])
-        # A version that was waved away before is no longer being refused.
-        self.assertIsNone(updater.load_state()["skipped"])
 
 
 class Reporting(Redirected):
@@ -449,14 +449,6 @@ class Reporting(Redirected):
         self.assertIn("ahead of the repository", said)
         self.assertIn("0.9.0", said)
         self.assertIn("few minutes", said)
-
-    def test_a_version_that_was_set_aside_still_gets_a_mention(self):
-        # The window is the thing that was told to drop it. Someone reading the
-        # terminal asked no such thing.
-        updater.skip("1.1.0")
-        said = self.said("1.1.0")
-        self.assertIn("1.1.0 is available", said)
-        self.assertIn("set that one aside", said)
 
     def test_a_failed_check_says_so_rather_than_nothing(self):
         said = self.said(None)

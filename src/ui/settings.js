@@ -438,8 +438,7 @@ function swapEveryBox() {
 
 // The number and the unit beside it are read as one phrase, so "every 1 days"
 // has to become "every 1 day". Only the labels change; the values the scheduler
-// is given are always the plural ones it stores. Lower case, because the CSS
-// puts the chosen one in capitals and leaves the open list as written.
+// is given are always the plural ones it stores.
 function labelUnits() {
   const one = everyValue() === 1;
   [...$('save_unit').options].forEach(o => {
@@ -780,7 +779,7 @@ async function loadSchedState() {
   // scheduled search can be set up, so the blocks that say so move with it.
   schedReady = !!res.ready;
   showWakes(res.wakes);
-  showSystemSettings(res.os);
+  showSystemSettings(res.os, res.hide_settings);
   refreshScheduleGate();
 }
 
@@ -788,14 +787,31 @@ async function loadSchedState() {
 // its menus don't exist here, and a page that lists both leaves you working
 // out which half to ignore. Anywhere that isn't macOS or Windows has no
 // automatic runs to make possible, so the section stays away entirely.
+// `hide` is the cards already matching what we recommend, so they don't sit
+// on the page as a to-do that's already done.
 const OS_NAMES = {darwin: 'macOS', windows: 'Windows'};
-function showSystemSettings(os) {
+function showSystemSettings(os, hide) {
+  hide = hide || [];
   $('sysMac').hidden = os !== 'darwin';
   $('sysWin').hidden = os !== 'windows';
-  $('sysBlock').hidden = !OS_NAMES[os];
   $('sysOs').textContent = OS_NAMES[os] || '';
+  document.querySelectorAll('[data-sys]').forEach(el => {
+    el.hidden = hide.indexOf(el.dataset.sys) >= 0;
+  });
+  // A Recommended / Optional heading with nothing under it is worse than none.
+  document.querySelectorAll('.sysrule').forEach(rule => {
+    let el = rule.nextElementSibling, any = false;
+    while (el && !el.classList.contains('sysrule')) {
+      if (el.classList.contains('setting') && !el.hidden) any = true;
+      el = el.nextElementSibling;
+    }
+    rule.hidden = !any;
+  });
+  const grp = os === 'darwin' ? $('sysMac') : os === 'windows' ? $('sysWin') : null;
+  const any = grp && [...grp.querySelectorAll('.setting')].some(el => !el.hidden);
+  $('sysBlock').hidden = !any;
 }
-showSystemSettings(SCHEDULE.os);
+showSystemSettings(SCHEDULE.os, SCHEDULE.hide_settings);
 
 // Paths in these messages have to be copyable, so they're set as text inside
 // <code> rather than pasted into innerHTML.
@@ -859,7 +875,7 @@ function showWakes(wakes) {
         until.toLocaleDateString(undefined,
         {weekday: 'long', month: 'long', day: 'numeric'})}`
       + (low ? ` — ${wakes.days_left} day${wakes.days_left === 1 ? '' : 's'} left` : '');
-  $('wakeHint').textContent = 'A Mac can only be given its wake-ups a few '
+  $('wakeHint').textContent = 'A Mac can only schedule its wake-ups a few '
     + 'weeks at a time, so they need renewing now and then. If they expire, '
     + 'searches that are scheduled to run multiple times a day will still run '
     + 'every day at ' + hour12(DAILY_HOUR) + ', and whenever the Mac is awake.';

@@ -1,8 +1,8 @@
 // ------------------------------------------------------- the offer of an update
 // Python has already decided whether there's anything to say — it knows the
-// version on disk, the one in the repository, and which ones were waved away.
-// An empty object means say nothing, which is also what a copy with no internet
-// and a clone with a .git folder both get.
+// version on disk and the one in the repository. An empty object means say
+// nothing, which is also what a copy with no internet and a clone with a .git
+// folder both get.
 const UPDATE = __UPDATE__;
 
 // However far behind this copy is, the offer reads the same. Being eleven
@@ -15,10 +15,9 @@ if (UPDATE.show) {
   $('updateBar').hidden = false;
 }
 
-$('updSkip').onclick = async () => {
-  $('updateBar').hidden = true;
-  await window.pyUpdateSkip(UPDATE.version);
-};
+// "Not now" is only good for this window. The offer comes back on the next
+// launch, because putting an update off is rarely the same as not wanting it.
+$('updSkip').onclick = () => { $('updateBar').hidden = true; };
 
 $('updGo').onclick = async () => {
   // Python is busy downloading for most of this, so it can't report progress
