@@ -111,7 +111,8 @@ python3 -m venv .venv
 `--no-ui` always goes straight to the sweep. Scheduled searches have their own entry
 point, `src/scheduling.py`: `--tick` (what launchd and Task Scheduler call: every
 due search in creation order, under one lock), `--list`, `--run NAME`,
-`--install`, `--uninstall`, `--test-email`, `--no-email`, and `--verify-probe`.
+`--install`, `--uninstall`, `--test-email`, `--no-email`, `--verify-probe`,
+and `--serve-galleries`.
 So does the updater, `src/updater.py`: no arguments reports whether a newer
 version exists, `--update` installs it. See [Updating a copy that was never
 cloned](#updating-a-copy-that-was-never-cloned).
@@ -664,17 +665,17 @@ refuse, and the gallery with the photos in it is already on the computer that
 ran the search. Only Gmail's host is special-cased by name;
 `smtp_target()` falls back to a user-supplied host and port.
 
-**The link to the real gallery is written to survive not working.**
-`_gallery_html()` turns the run's path into a `file://` link through
-`Path.as_uri()`, which encodes the spaces and ampersands a raw href would
-mangle. That link is only meaningful on the machine that holds the file: read on
-a phone it does nothing, read after the folder moved it lands on the browser's
-own "file not found", and Gmail strips `file://` hrefs before rendering. So the
-link text is never "click here" — the path stays printed underneath as plain
-text, the sentence beside it names the attachments as the copy that opens
-anywhere, and a path that can't become a URL at all (a relative one, which would
-resolve against the reader's machine and point somewhere real and wrong) is left
-as text with no link at all.
+**The link to the real gallery is a localhost http URL, not a `file://` one.**
+Gmail strips `file://` hrefs before rendering, which left "Open the full
+gallery" looking like ordinary text. `_gallery_url()` writes
+`http://127.0.0.1:18741/...` instead, which mail clients keep as a real link.
+`--serve-galleries` answers those on this computer only, serving nothing except
+`gallery.html` files under `runs/`. The server is started by every tick and
+by `--install`, and outlives the process that launched it. Clicked from a phone it lands on a connection error, so the sentence beside
+it still names the attachments and the Past searches tab — the link is never
+the only way back. A path that can't become a URL at all (a relative one, which
+would resolve against the reader's machine and point somewhere real and wrong)
+is left with no link.
 
 **Credentials fail at the wrong layer, so the shape is checked early.** A
 mistyped address and a wrong password are the same error to a mail server: it

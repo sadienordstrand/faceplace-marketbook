@@ -11,6 +11,7 @@ Searches that run themselves on a schedule and email you the results.
     python3 src/scheduling.py --uninstall
     python3 src/scheduling.py --test-email
     python3 src/scheduling.py --verify-probe URL
+    python3 src/scheduling.py --serve-galleries  # localhost server for email links
 
 Everything lives in one module on purpose: launchd and Task Scheduler need a
 single entry point to call, and the runner, the schedule arithmetic and the
@@ -28,6 +29,7 @@ import os
 import platform
 import re
 import smtplib
+import socket
 import ssl
 import subprocess
 import sys
@@ -36,7 +38,9 @@ import traceback
 from datetime import datetime, timedelta
 from email.message import EmailMessage
 from email.utils import formatdate, make_msgid
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import quote, unquote, urlparse
 
 import browser
 import descriptions
@@ -53,6 +57,16 @@ EMAIL_CONFIG_PATH = paths.EMAIL_CONFIG_PATH
 SCHEDULE_DIR = paths.SCHEDULE_DIR
 LOCK_PATH = SCHEDULE_DIR / "run.lock"
 TICK_LOG = SCHEDULE_DIR / "tick.log"
+RUNS_DIR = paths.RUNS_DIR
+
+# Gmail (and most other webmail) strips file:// hrefs before the message is
+# shown, which is why a perfectly valid <a> arrives as ordinary text. An
+# http://127.0.0.1 link survives that, and only does anything on this computer
+# — same as the file it points at. The server that answers it is started by
+# every tick and by --install.
+GALLERY_HOST = "127.0.0.1"
+GALLERY_PORT = 18741
+GALLERY_NAMES = ("gallery.html", "lightweight_gallery.html")
 
 
 def _support_dir():
@@ -1140,6 +1154,10 @@ def build_report(search, summary, next_run=None, warnings=()):
     T.append("The attached files contain stripped-down versions of the listings "
              "in your search results. To view the full gallery, open Faceplace "
              "Marketbook on your computer and go to the Past searches tab.")
+    url = _gallery_url(summary.get("gallery"))
+    if url:
+        T.append(url)
+        T.append("(This link only works on the computer that ran the search.)")
     T.append("")
     if next_run:
         T.append(f"Next run: {fmt_when(next_run)}.")
@@ -1156,25 +1174,112 @@ def _esc(s):
             .replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;"))
 
 
-def _file_url(path):
-    """A file:// link to something on this computer, with the spaces and
-    accents in a folder name encoded the way a browser wants them. None rather
-    than a guess if the path isn't absolute: a link to the wrong place is worse
-    than no link, because the path underneath it is still readable."""
+def _gallery_url(path):
+    """An http://127.0.0.1 link to a gallery on this computer.
+
+    file:// looks like a link in the HTML we write and like ordinary text in
+    Gmail, which strips that scheme before the message is shown. A localhost
+    http URL survives, and only does anything on this machine. None rather than
+    a guess if the path isn't absolute: a link to the wrong place is worse than
+    no link.
+    """
     try:
         p = Path(path)
-        return p.as_uri() if p.is_absolute() else None
+        if not p.is_absolute():
+            return None
+        return (f"http://{GALLERY_HOST}:{GALLERY_PORT}/"
+                f"{quote(p.as_posix().lstrip('/'), safe=':/')}")
     except (TypeError, ValueError, OSError):
         return None
+
+
+def resolve_gallery(url_path):
+    """The local file a gallery URL is asking for, or None if it isn't one we
+    should be serving. Only gallery.html files under the runs folder — a
+    localhost server that would read anywhere on the disk is a hole."""
+    raw = unquote(url_path or "")
+    if re.match(r"^/[A-Za-z]:", raw):
+        raw = raw[1:]
+    try:
+        wanted = Path(raw).resolve()
+        root = Path(RUNS_DIR).resolve()
+        wanted.relative_to(root)
+    except (TypeError, ValueError, OSError):
+        return None
+    if wanted.name not in GALLERY_NAMES or not wanted.is_file():
+        return None
+    return wanted
+
+
+class _GalleryHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        gallery = resolve_gallery(urlparse(self.path).path)
+        if not gallery:
+            self.send_error(404, "Not found")
+            return
+        data = gallery.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def log_message(self, fmt, *args):
+        return
+
+
+def _gallery_server_up():
+    try:
+        with socket.create_connection((GALLERY_HOST, GALLERY_PORT), timeout=0.3):
+            return True
+    except OSError:
+        return False
+
+
+def ensure_gallery_server():
+    """Start the localhost gallery server if it isn't already answering.
+
+    The process outlives the tick that launched it, so a report emailed at 5am
+    still has something listening when the link is clicked that evening. Bind
+    failures (already running, or the port taken) are silent: the email still
+    names Past searches and carries the attachments."""
+    if _gallery_server_up():
+        return
+    kw = dict(cwd=str(ROOT), stdout=subprocess.DEVNULL,
+              stderr=subprocess.DEVNULL)
+    if os_name() == "windows":
+        flags = 0
+        for name in ("DETACHED_PROCESS", "CREATE_NEW_PROCESS_GROUP",
+                     "CREATE_NO_WINDOW"):
+            flags |= getattr(subprocess, name, 0)
+        kw["creationflags"] = flags
+    else:
+        kw["start_new_session"] = True
+    try:
+        subprocess.Popen(
+            [python_exe(), str(paths.SCHEDULER_ENTRY), "--serve-galleries"],
+            **kw)
+    except OSError:
+        pass
+
+
+def serve_galleries():
+    try:
+        httpd = ThreadingHTTPServer((GALLERY_HOST, GALLERY_PORT), _GalleryHandler)
+    except OSError:
+        return
+    try:
+        httpd.serve_forever()
+    finally:
+        httpd.server_close()
 
 
 def _gallery_html(summary, accent):
     """The way back to the full-size gallery.
 
-    It lives on one computer, so the link to it is a file:// one, and that only
-    does anything on that machine — clicked from a phone it either does nothing
-    or lands on the browser's own "file not found", and some mail clients strip
-    the link out before it's ever shown. So the link is never the only way
+    It lives on one computer, so the link to it is a localhost http one, and
+    that only does anything on that machine — clicked from a phone it lands on
+    the browser's own connection error. So the link is never the only way
     back: the attachments open anywhere, and on the machine that ran the search
     the app lists the run itself, which is a route that survives not having a
     path to hand.
@@ -1184,12 +1289,12 @@ def _gallery_html(summary, accent):
                 "listings in your search results. To view the full gallery, "
                 "open Faceplace Marketbook on your computer and go to the "
                 "<b>Past searches</b> tab")
-    url = _file_url(summary.get("gallery"))
+    url = _gallery_url(summary.get("gallery"))
     if not url:
         return f'<p style="{foot}">{attached}.</p>'
     return (f'<p style="{foot}">{attached}, or click the link below.</p>'
             f'<p style="margin:0 0 4px"><a href="{_esc(url)}" '
-            f'style="color:{accent};font-weight:700;text-decoration:none">'
+            f'style="color:{accent};font-weight:700;text-decoration:underline">'
             f'Open the full gallery &rarr;</a></p>'
             f'<p style="color:{accent};font-size:13px;margin:0 0 12px">'
             f'Note: the link will only work if you&rsquo;re on the computer '
@@ -1509,6 +1614,7 @@ def tick(now=None, sweep=None, send=True, force=None):
     """What the OS calls. Runs every due search, one at a time, in the order they
     were created. Holds the lock for the whole batch so a manual run can't start
     halfway through."""
+    ensure_gallery_server()
     from fb_marketplace_sweep import SessionExpired
 
     now = now or now_local()
@@ -1889,6 +1995,7 @@ def install_schedule(daily_wake=True, verify=True):
                 return False, permission_help()
         msgs.append(f"Scheduler installed; it checks for due searches every "
                     f"{TICK_SECONDS // 60} minutes while awake.")
+        ensure_gallery_server()
         if daily_wake:
             msgs.append(set_wakes())
         return True, msgs
@@ -1905,6 +2012,7 @@ def install_schedule(daily_wake=True, verify=True):
         msgs.append(f"Scheduled task '{WIN_TASK}' created; it checks for due "
                     f"searches every {TICK_SECONDS // 60} minutes and may wake "
                     f"the computer.")
+        ensure_gallery_server()
         return True, msgs
 
     return False, ["Automatic runs are only set up for macOS and Windows."]
@@ -2525,6 +2633,8 @@ def main():
                     help="run but don't send the report")
     ap.add_argument("--verify-probe", nargs="+", metavar="URL",
                     help="classify listing URLs as live, sold or gone")
+    ap.add_argument("--serve-galleries", action="store_true",
+                    help="answer localhost links to this computer's galleries")
     a = ap.parse_args()
 
     if a.do_list:
@@ -2533,6 +2643,8 @@ def main():
         cmd_test_email()
     elif a.verify_probe:
         cmd_verify_probe(a.verify_probe)
+    elif a.serve_galleries:
+        serve_galleries()
     elif a.install:
         ok, msgs = install_schedule()
         for m in msgs:

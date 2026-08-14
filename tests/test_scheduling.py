@@ -67,11 +67,16 @@ class Redirected(unittest.TestCase):
                        "_admin_shell": sc._admin_shell}
         sc.scheduled_wakes = lambda: []
         sc._admin_shell = lambda lines: True
+        # A localhost gallery server must never be spawned from a test: the
+        # process would outlive the run and sit on the port.
+        self._real_ensure = sc.ensure_gallery_server
+        sc.ensure_gallery_server = lambda: None
         self.addCleanup(self._restore)
         self.addCleanup(self.tmp.cleanup)
 
     def _restore(self):
         sc.log = self._real_log
+        sc.ensure_gallery_server = self._real_ensure
         for k, v in self._wakes.items():
             setattr(sc, k, v)
         for k, v in self._saved.items():
@@ -986,14 +991,15 @@ class TestReport(unittest.TestCase):
         self.assertIn("1997 Defender 110", html)
 
     def test_it_says_where_the_full_gallery_is(self):
-        # The way back to everything is the app itself, not a folder the reader
-        # would have to go find on disk.
+        # The way back to everything is the app itself, plus a localhost link
+        # that only works on the machine that ran the search — not a folder
+        # the reader would have to go find on disk.
         _, text, html = self.report()
         for body in (text, html):
             self.assertIn("Past searches", body)
             self.assertIn("Faceplace Marketbook", body)
         self.assertIn("stripped-down versions", text)
-        self.assertNotIn("runs/saved/defender_110", text)
+        self.assertIn("http://127.0.0.1:18741/", text)
 
     def test_nothing_removed_says_so_explicitly(self):
         _, text, html = self.report(removed=[])
@@ -1079,30 +1085,34 @@ class TestGalleryLink(unittest.TestCase):
         return sc.build_report(SEARCH, summary_fixture(**kw), None, ())[2]
 
     def test_the_gallery_is_a_link_and_not_just_a_path(self):
+        # http://127.0.0.1, not file://: Gmail strips the latter and the
+        # "Open the full gallery" text arrives as ordinary words.
         html = self.html()
         self.assertIn(
-            'href="file:///tmp/runs/saved/defender_110/gallery.html"', html)
+            'href="http://127.0.0.1:18741/tmp/runs/saved/defender_110/gallery.html"',
+            html)
+        self.assertNotIn("file://", html)
 
     def test_a_folder_name_with_spaces_still_makes_a_working_link(self):
         # A scheduled search called "Defender 110" would slug down, but nothing
         # stops a run folder holding a space or an ampersand, and a raw one in
         # an href is a link that lands somewhere else or nowhere.
         html = self.html(gallery="/tmp/runs/my search & co/gallery.html")
-        self.assertIn('href="file:///tmp/runs/my%20search%20%26%20co/gallery.html"',
-                      html)
+        self.assertIn(
+            'href="http://127.0.0.1:18741/tmp/runs/my%20search%20%26%20co/gallery.html"',
+            html)
         self.assertNotIn("my search & co/gallery.html", html)
 
     def test_the_link_is_never_the_only_way_back(self):
-        # Gmail strips file:// hrefs, and a reader on a phone can't use one
-        # anyway, so the paragraph around it has to name a route that doesn't
-        # depend on the link working.
+        # A phone can't reach this computer's localhost, so the paragraph
+        # around the link has to name a route that doesn't depend on it.
         html = self.html()
         self.assertIn("Past searches", html)
         self.assertIn("attached files", html)
 
     def test_a_run_with_no_gallery_points_at_the_app_not_the_folder(self):
         html = self.html(gallery=None)
-        self.assertNotIn("file://", html)
+        self.assertNotIn("127.0.0.1", html)
         self.assertNotIn("/tmp/runs/saved/defender_110", html)
         self.assertIn("Past searches", html)
 
@@ -1111,13 +1121,13 @@ class TestGalleryLink(unittest.TestCase):
         # the email. A link built from one would point somewhere real and
         # wrong, and the path on its own is no use to the reader either.
         html = self.html(gallery="runs/saved/defender_110/gallery.html")
-        self.assertNotIn("file://", html)
+        self.assertNotIn("127.0.0.1", html)
         self.assertNotIn("runs/saved/defender_110/gallery.html", html)
         self.assertIn("Past searches", html)
 
     def test_nothing_written_anywhere_still_leaves_a_sane_paragraph(self):
         html = self.html(gallery=None, run_dir=None)
-        self.assertNotIn("file://", html)
+        self.assertNotIn("127.0.0.1", html)
         self.assertNotIn("<code", html)
         self.assertIn("attached files", html)
 
@@ -1128,15 +1138,111 @@ class TestGalleryLink(unittest.TestCase):
             self.assertIn("The attached files contain stripped-down versions",
                           self.html(**kw))
 
-    def test_the_link_is_the_one_the_app_itself_would_open(self):
-        # past_runs opens a gallery with the same file:// form; if the two ever
-        # disagreed, one of them would be the broken one.
+    def test_the_plain_text_copy_carries_the_same_link(self):
+        _, text, html = sc.build_report(SEARCH, summary_fixture(), None, ())
+        url = "http://127.0.0.1:18741/tmp/runs/saved/defender_110/gallery.html"
+        self.assertIn(url, text)
+        self.assertIn(f'href="{url}"', html)
+
+    def test_the_href_is_the_url_the_server_would_be_asked_for(self):
         with TemporaryDirectory() as tmp:
             gallery = Path(tmp) / "runs" / "saved" / "d 110" / "gallery.html"
             gallery.parent.mkdir(parents=True)
             gallery.write_text("<html>", encoding="utf-8")
-            self.assertIn(f'href="{gallery.as_uri()}"',
+            self.assertIn(f'href="{sc._gallery_url(str(gallery))}"',
                           self.html(gallery=str(gallery)))
+
+
+class TestGalleryServer(unittest.TestCase):
+    """The localhost server behind the email link. It has to serve a gallery
+    and refuse everything else — a port on 127.0.0.1 that would read anywhere
+    on the disk is a hole."""
+
+    def setUp(self):
+        self.tmp = TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.runs = Path(self.tmp.name) / "runs"
+        self.runs.mkdir()
+        self.addCleanup(setattr, sc, "RUNS_DIR", sc.RUNS_DIR)
+        sc.RUNS_DIR = self.runs
+
+    def put(self, rel, text="<html>gallery</html>"):
+        path = self.runs / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        return path.resolve()
+
+    def test_a_gallery_under_runs_is_the_file_the_url_names(self):
+        path = self.put("saved/defender_110/gallery.html")
+        self.assertEqual(sc.resolve_gallery(str(path)), path)
+
+    def test_the_lightweight_gallery_is_allowed_too(self):
+        path = self.put("saved/x/lightweight_gallery.html")
+        self.assertEqual(sc.resolve_gallery(str(path)), path)
+
+    def test_a_csv_next_to_the_gallery_is_refused(self):
+        path = self.put("saved/x/results.csv", "item_id\n")
+        self.assertIsNone(sc.resolve_gallery(str(path)))
+
+    def test_a_gallery_outside_runs_is_refused(self):
+        other = Path(self.tmp.name) / "gallery.html"
+        other.write_text("<html>", encoding="utf-8")
+        self.assertIsNone(sc.resolve_gallery(str(other)))
+
+    def test_dot_dot_cannot_walk_out_of_runs(self):
+        secret = Path(self.tmp.name) / "gallery.html"
+        secret.write_text("secret", encoding="utf-8")
+        sneaky = self.runs / "saved" / ".." / ".." / "gallery.html"
+        self.assertIsNone(sc.resolve_gallery(str(sneaky)))
+
+    def test_a_missing_gallery_is_refused(self):
+        self.assertIsNone(sc.resolve_gallery(
+            str(self.runs / "saved" / "gone" / "gallery.html")))
+
+    def test_the_handler_returns_the_gallery_bytes(self):
+        from http.server import ThreadingHTTPServer
+        from urllib.request import urlopen
+        path = self.put("saved/x/gallery.html", "<html>hello</html>")
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), sc._GalleryHandler)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        self.addCleanup(httpd.server_close)
+        self.addCleanup(httpd.shutdown)
+        with urlopen(f"http://127.0.0.1:{httpd.server_address[1]}{path.as_posix()}",
+                     timeout=2) as r:
+            self.assertEqual(r.read(), b"<html>hello</html>")
+
+    def test_the_handler_404s_anything_that_is_not_a_gallery(self):
+        from http.server import ThreadingHTTPServer
+        from urllib.error import HTTPError
+        from urllib.request import urlopen
+        path = self.put("saved/x/results.csv", "nope")
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), sc._GalleryHandler)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        self.addCleanup(httpd.server_close)
+        self.addCleanup(httpd.shutdown)
+        with self.assertRaises(HTTPError) as raised:
+            urlopen(f"http://127.0.0.1:{httpd.server_address[1]}{path.as_posix()}",
+                    timeout=2)
+        self.assertEqual(raised.exception.code, 404)
+        raised.exception.close()
+
+    def test_ensure_starts_the_server_when_nothing_is_listening(self):
+        started = []
+        self.addCleanup(setattr, sc, "_gallery_server_up", sc._gallery_server_up)
+        self.addCleanup(setattr, sc.subprocess, "Popen", sc.subprocess.Popen)
+        sc._gallery_server_up = lambda: False
+        sc.subprocess.Popen = lambda cmd, **kw: started.append(cmd)
+        sc.ensure_gallery_server()
+        self.assertEqual(started[0][-1], "--serve-galleries")
+
+    def test_ensure_does_not_spawn_a_second_server(self):
+        started = []
+        self.addCleanup(setattr, sc, "_gallery_server_up", sc._gallery_server_up)
+        self.addCleanup(setattr, sc.subprocess, "Popen", sc.subprocess.Popen)
+        sc._gallery_server_up = lambda: True
+        sc.subprocess.Popen = lambda cmd, **kw: started.append(cmd)
+        sc.ensure_gallery_server()
+        self.assertEqual(started, [])
 
 
 # ------------------------------------------------------------------ attachments
