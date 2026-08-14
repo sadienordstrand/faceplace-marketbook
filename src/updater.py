@@ -512,7 +512,7 @@ def still_running(error):
         # %-I isn't portable to Windows, so the hour is formatted by hand — the
         # same reason scheduling.py does it this way.
         since = (f" It started at {at.hour % 12 or 12}:{at:%M}"
-                 f"{' am' if at.hour < 12 else ' pm'}.")
+                 f"{'am' if at.hour < 12 else 'pm'}.")
     return (f"A search is running in this folder, so the update will have to "
             f"wait.{since} Let it finish, then try again.")
 

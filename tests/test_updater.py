@@ -579,7 +579,7 @@ class WhileSomethingIsRunning(Redirected):
         with mock.patch.object(updater, "fetch", return_value=make_zip(SHIPPED)):
             answer = updater.update_now()
         self.assertIn("A search is running in this folder", answer["error"])
-        self.assertIn("It started at 4:55 pm", answer["error"])
+        self.assertIn("It started at 4:55pm", answer["error"])
         self.assertIn("Let it finish", answer["error"])
         self.assertEqual((self.root / "src" / "version.py").read_bytes(), before)
 

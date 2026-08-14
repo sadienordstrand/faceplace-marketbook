@@ -25,7 +25,7 @@ from datetime import datetime
 from pathlib import Path
 
 import paths
-# The Scheduled searches tab says "yesterday at 5:12 pm"; this one has to phrase it
+# The Scheduled searches tab says "yesterday at 5:12pm"; this one has to phrase it
 # the same way, so the formatting comes from the module that owns it rather than
 # being written a second time.
 import scheduling

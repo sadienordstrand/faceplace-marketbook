@@ -194,7 +194,7 @@ class TestTimeParsing(unittest.TestCase):
 
     def test_an_offset_is_converted_not_discarded(self):
         # The sweep records its start in UTC. Dropping the offset instead of
-        # converting put an 11:12pm run into the report as "tomorrow at 5:12 am".
+        # converting put an 11:12pm run into the report as "tomorrow at 5:12am".
         naive = sc.parse_iso("2026-08-07T05:12:00+00:00")
         expect = (datetime.fromisoformat("2026-08-07T05:12:00+00:00")
                   .astimezone().replace(tzinfo=None))

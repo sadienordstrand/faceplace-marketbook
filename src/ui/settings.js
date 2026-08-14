@@ -401,8 +401,8 @@ HOUR_CHOICES.forEach(n => {
   $('save_every_hours').appendChild(o);
 });
 
-const hour12 = h => h === 0 ? '12 am' : h < 12 ? `${h} am`
-  : h === 12 ? '12 pm' : `${h - 12} pm`;
+const hour12 = h => h === 0 ? '12am' : h < 12 ? `${h}am`
+  : h === 12 ? '12pm' : `${h - 12}pm`;
 
 // The times of day an every-N-hours search runs at, spelled out so "every 6
 // hours" is never a guess about where the sixes fall.

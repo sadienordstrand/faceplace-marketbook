@@ -190,7 +190,7 @@ def parse_iso(s):
     if dt.tzinfo is not None:
         # Convert, don't just drop the offset. The sweep records its start time in
         # UTC, and reading that as local wall clock put a run that happened at
-        # 11:12pm into a report as "started tomorrow at 5:12 am".
+        # 11:12pm into a report as "started tomorrow at 5:12am".
         dt = dt.astimezone().replace(tzinfo=None)
     return dt.replace(microsecond=0)
 
@@ -198,7 +198,7 @@ def parse_iso(s):
 def _hour12(dt):
     # %-I is not portable to Windows, so format the hour by hand.
     h = dt.hour % 12 or 12
-    return f"{h}:{dt:%M} {'am' if dt.hour < 12 else 'pm'}"
+    return f"{h}:{dt:%M}{'am' if dt.hour < 12 else 'pm'}"
 
 
 def fmt_when(dt):

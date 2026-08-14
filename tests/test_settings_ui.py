@@ -42,10 +42,10 @@ ACCOUNT = {"provider": "gmail", "address": "me@gmail.com",
            "app_password": "abcd efgh ijkl mnop"}
 RUNS = [{"id": "defender_110_08-09-2026", "name": "defender 110",
          "scheduled": False, "when": "2026-08-09T23:14:26",
-         "when_text": "today at 11:14 pm", "listings": 121, "new_listings": None,
+         "when_text": "today at 11:14pm", "listings": 121, "new_listings": None,
          "cities": 2, "duration_text": "2m 8s", "earlier_runs": 0},
         {"id": "saved/nightly", "name": "nightly", "scheduled": True,
-         "when": "2026-08-08T05:00:00", "when_text": "yesterday at 5:00 am",
+         "when": "2026-08-08T05:00:00", "when_text": "yesterday at 5:00am",
          "listings": 40, "new_listings": 3, "cities": 1,
          "duration_text": "9m 2s", "earlier_runs": 4}]
 
@@ -1384,10 +1384,10 @@ class UITest(unittest.TestCase):
                                           "els => els.map(e => e.value)"),
                 ["3", "4", "6", "8", "12"])
             page.select_option("#save_every_hours", "6")
-            self.assertIn("5 am, 11 am, 5 pm and 11 pm",
+            self.assertIn("5am, 11am, 5pm and 11pm",
                           page.text_content("#everyHint"))
             page.select_option("#save_every_hours", "12")
-            self.assertIn("5 am and 5 pm", page.text_content("#everyHint"))
+            self.assertIn("5am and 5pm", page.text_content("#everyHint"))
             # And back to days, the typed number returns.
             page.select_option("#save_unit", "days")
             self.assertFalse(page.is_hidden("#save_every"))
@@ -1531,7 +1531,7 @@ class UITest(unittest.TestCase):
             self.assertIn("121 listings", first)
             self.assertIn("2 cities", first)
             self.assertIn("took 2m 8s", first)
-            self.assertIn("today at 11:14 pm", first)
+            self.assertIn("today at 11:14pm", first)
             # Not where it lives. A card is how you get to a run; naming the
             # folder only suggests that one day you'll have to go and find it.
             self.assertNotIn("runs/", first)
