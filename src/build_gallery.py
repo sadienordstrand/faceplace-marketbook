@@ -24,6 +24,8 @@ import json
 import mimetypes
 from pathlib import Path
 
+import storage
+
 EMBED_BUDGET_MB = 60
 UI_DIR = Path(__file__).resolve().parent / "ui"
 
@@ -63,14 +65,18 @@ def embed_images(rows, base_dir, budget_mb=EMBED_BUDGET_MB):
 
 
 def build(csv_in, out=None, embed=True, budget_mb=EMBED_BUDGET_MB, only_ids=None,
-          quiet=False, images=True):
+          quiet=False, images=True, dates=True):
     """only_ids limits the gallery to those item_ids, which is how the emailed
     "just the new listings" attachment is built from the same CSV.
 
     images=False leaves the photos out altogether, which is what the emailed
     attachments use. Dropping the image paths rather than only the embedding
     matters: a path to a thumbnails/ folder the recipient hasn't got shows up as
-    "image expired", which reads as something having gone wrong."""
+    "image expired", which reads as something having gone wrong.
+
+    dates=False drops the first-found column, for a gallery whose listings were
+    all found by the same run — there, the line says the same thing on every
+    card and so says nothing on any of them."""
     src = Path(csv_in)
     with open(src, newline="", encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
@@ -83,6 +89,9 @@ def build(csv_in, out=None, embed=True, budget_mb=EMBED_BUDGET_MB, only_ids=None
         if iid and iid not in seen:
             seen.add(iid)
             uniq.append(r)
+    if not dates:
+        for r in uniq:
+            r.pop(storage.FIRST_FOUND, None)
     note = ""
     if not images:
         for r in uniq:

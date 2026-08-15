@@ -14,6 +14,7 @@ import csv
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -571,6 +572,39 @@ class TestRunBookkeeping(unittest.TestCase):
         sc.record_run(self.con, "s1", {"total_ids": ["a"], "status": "ok"})
         sc.record_run(self.con, "s2", {"total_ids": ["b"], "status": "ok"})
         self.assertEqual(sc.previous_item_ids(self.con, "s1"), ["a"])
+
+    def run_of(self, search_id, started, *item_ids, status="ok"):
+        sc.record_run(self.con, search_id, {"started": started, "status": status,
+                                            "total_ids": list(item_ids)})
+
+    def test_a_search_with_no_runs_behind_it_has_no_dates_to_give(self):
+        # Which is the signal to leave the column out of the gallery entirely.
+        self.assertIsNone(sc.first_found_by_item(self.con, "s1"))
+
+    def test_each_listing_is_dated_from_the_run_that_first_carried_it(self):
+        self.run_of("s1", "2026-06-01T09:00:00+00:00", "a", "b")
+        self.run_of("s1", "2026-07-01T09:00:00+00:00", "a", "b", "c")
+        self.run_of("s1", "2026-08-01T09:00:00+00:00", "a", "c", "d")
+        self.assertEqual(sc.first_found_by_item(self.con, "s1"), {
+            "a": "2026-06-01T09:00:00+00:00",
+            "b": "2026-06-01T09:00:00+00:00",
+            "c": "2026-07-01T09:00:00+00:00",
+            "d": "2026-08-01T09:00:00+00:00"})
+
+    def test_another_search_having_seen_it_first_means_nothing_here(self):
+        # The whole reason this is per search. The archive is shared, so a
+        # listing an older search found in June is not something this search
+        # found in June — a date from before it existed is worse than no date.
+        self.run_of("older", "2026-06-01T09:00:00+00:00", "a")
+        self.run_of("s1", "2026-08-01T09:00:00+00:00", "a")
+        self.run_of("s1", "2026-08-08T09:00:00+00:00", "a")
+        self.assertEqual(sc.first_found_by_item(self.con, "s1"),
+                         {"a": "2026-08-01T09:00:00+00:00"})
+
+    def test_a_failed_run_dates_nothing(self):
+        self.run_of("s1", "2026-06-01T09:00:00+00:00", "a",
+                    status="session_expired")
+        self.assertIsNone(sc.first_found_by_item(self.con, "s1"))
 
     def test_rows_for_ids_reads_back_full_listings(self):
         storage.upsert(self.con, {"item_id": "a", "title": "Rover", "price": "$1"})
@@ -1280,7 +1314,7 @@ class TestAttachments(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.dir = Path(self.tmp.name)
 
-    def build_csv(self, n=6, image_bytes=0):
+    def build_csv(self, n=6, image_bytes=0, dated=False):
         thumbs = self.dir / "thumbnails"
         thumbs.mkdir(exist_ok=True)
         rows = []
@@ -1291,13 +1325,15 @@ class TestAttachments(unittest.TestCase):
                 p = thumbs / f"{iid}.jpg"
                 p.write_bytes(os.urandom(image_bytes))
                 img = f"thumbnails/{iid}.jpg"
-            rows.append(listing(iid, f"Listing {i}", image=img))
+            rows.append(listing(iid, f"Listing {i}", image=img,
+                                first_found="2026-08-01T09:00:00+00:00"))
+        fields = storage.FIELDS + ([storage.FIRST_FOUND] if dated else [])
         csv_path = self.dir / "results.csv"
         with open(csv_path, "w", newline="", encoding="utf-8") as f:
-            w = csv.DictWriter(f, fieldnames=storage.FIELDS)
+            w = csv.DictWriter(f, fieldnames=fields)
             w.writeheader()
             for r in rows:
-                w.writerow({k: r.get(k, "") for k in storage.FIELDS})
+                w.writerow({k: r.get(k, "") for k in fields})
         return csv_path
 
     def test_two_attachments_are_produced(self):
@@ -1317,6 +1353,24 @@ class TestAttachments(unittest.TestCase):
         all_html = attachments[1][1].decode("utf-8")
         for i in range(5):
             self.assertIn(f"Listing {i}", all_html)
+
+    def listings_in(self, html):
+        """The gallery's own embedded listing data, which is the only place the
+        column shows up — the page's inline script names the field either way."""
+        block = re.search(r'<script id="data" type="application/json">(.*?)'
+                          r'</script>', html, re.S).group(1)
+        return json.loads(block.replace("<\\/", "</"))
+
+    def test_only_the_full_file_carries_the_first_found_dates(self):
+        # Every listing in the new-listings file was found by the run that sent
+        # it, so the date there is one timestamp repeated down the page.
+        csv_path = self.build_csv(n=5, dated=True)
+        attachments, _ = sc.build_attachments(csv_path, ["i0", "i3"])
+        new_rows, all_rows = (self.listings_in(a[1].decode("utf-8"))
+                              for a in attachments)
+        self.assertTrue(all(storage.FIRST_FOUND not in r for r in new_rows))
+        self.assertTrue(all(r[storage.FIRST_FOUND] == "2026-08-01T09:00:00+00:00"
+                            for r in all_rows))
 
     def test_no_new_listings_means_only_the_full_file(self):
         csv_path = self.build_csv()
@@ -2129,13 +2183,24 @@ class TestScheduledPipeline(Redirected):
         for k, v in self._storage.items():
             setattr(storage, k, v)
 
-    def stub_sweep(self, batches):
+    def stub_sweep(self, batches, starts=None):
         """Each entry is (rows found in the feed, listings confirmed removed).
-        Uses the real reconciliation so the carry-forward rule is exercised."""
+        Uses the real reconciliation so the carry-forward rule is exercised.
+
+        `starts` supplies each call's start time. Left out, the runs are stamped
+        with the clock, which for two runs in the same test is the same second —
+        fine for everything except the tests about which run found what, and
+        those pass their own."""
+        mine = []
+
         def sweep(query, scrolls, exact, **kw):
             self.calls.append(kw)
+            mine.append(kw)
             self.asked_for.append(query)
-            feed_rows, removed = batches[len(self.calls) - 1]
+            nth = len(mine) - 1
+            feed_rows, removed = batches[nth]
+            started = (starts or [None] * len(batches))[nth] \
+                or sc.iso(sc.now_local())
             run_dir = Path(kw["run_dir"])
             prev_by_id = {r["item_id"]: dict(r)
                           for r in (kw.get("previous_rows") or [])}
@@ -2144,12 +2209,19 @@ class TestScheduledPipeline(Redirected):
                 all_rows, prev_by_id, {r["item_id"] for r in removed})
             rows = list(all_rows.values())
 
+            # The same rule the real sweep writes its CSV by: the column is
+            # there only when the search handed over dates to fill it with.
+            fields, first_found = storage.FIELDS, kw.get("first_found")
+            if first_found is not None:
+                for r in rows:
+                    r[storage.FIRST_FOUND] = first_found.get(r["item_id"]) or started
+                fields = storage.FIELDS + [storage.FIRST_FOUND]
             csv_path = run_dir / "results.csv"
             with open(csv_path, "w", newline="", encoding="utf-8") as f:
-                w = csv.DictWriter(f, fieldnames=storage.FIELDS)
+                w = csv.DictWriter(f, fieldnames=fields)
                 w.writeheader()
                 for r in rows:
-                    w.writerow({k: r.get(k, "") for k in storage.FIELDS})
+                    w.writerow({k: r.get(k, "") for k in fields})
             (run_dir / "run.json").write_text(
                 json.dumps({"query": query}), encoding="utf-8")
             (run_dir / "gallery.html").write_text("<html></html>", encoding="utf-8")
@@ -2161,7 +2233,7 @@ class TestScheduledPipeline(Redirected):
             return {
                 "status": "ok", "run_dir": str(run_dir), "csv": str(csv_path),
                 "gallery": str(run_dir / "gallery.html"),
-                "started": sc.iso(sc.now_local()),
+                "started": started,
                 "finished": sc.iso(sc.now_local()), "duration_seconds": 42.0,
                 "new_ids": new_ids,
                 "feed_ids": [r["item_id"] for r in feed_rows],
@@ -2250,6 +2322,69 @@ class TestScheduledPipeline(Redirected):
         self.assertEqual(
             sorted(r["item_id"] for r in second_kwargs["previous_rows"]),
             ["a", "b", "c"])
+
+    # -- when this search first found each listing --------------------------
+    def csv_rows(self, summary):
+        with open(summary["csv"], newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            return reader.fieldnames, list(reader)
+
+    def test_a_first_run_writes_no_first_found_column(self):
+        # Every listing was found just now, so a column saying so on every card
+        # is noise — and the gallery hides the sort option along with it.
+        rec = self.make()
+        summary = sc.run_saved_search(
+            rec, sweep=self.stub_sweep([(self.batch("a", "b"), [])]))
+        fields, _ = self.csv_rows(summary)
+        self.assertNotIn(storage.FIRST_FOUND, fields)
+        self.assertIsNone(self.calls[0]["first_found"])
+
+    def test_the_second_run_dates_each_listing_from_the_run_that_found_it(self):
+        rec = self.make(interval={"every": 5, "unit": "minutes"})
+        sweep = self.stub_sweep(
+            [(self.batch("a", "b"), []), (self.batch("a", "b", "c"), [])],
+            starts=["2026-08-01T09:00:00+00:00", "2026-08-08T09:00:00+00:00"])
+        sc.run_saved_search(rec, sweep=sweep)
+        second = sc.run_saved_search(sc.load_searches()[0], sweep=sweep)
+        fields, rows = self.csv_rows(second)
+        self.assertIn(storage.FIRST_FOUND, fields)
+        self.assertEqual({r["item_id"]: r[storage.FIRST_FOUND] for r in rows},
+                         {"a": "2026-08-01T09:00:00+00:00",
+                          "b": "2026-08-01T09:00:00+00:00",
+                          "c": "2026-08-08T09:00:00+00:00"})
+
+    def test_a_carried_listing_keeps_the_date_it_was_first_seen_on(self):
+        # It fell out of the feed on run two and was only carried forward, so
+        # the run that found it is still run one.
+        rec = self.make(interval={"every": 5, "unit": "minutes"})
+        sweep = self.stub_sweep(
+            [(self.batch("a", "b"), []), (self.batch("a"), [])],
+            starts=["2026-08-01T09:00:00+00:00", "2026-08-08T09:00:00+00:00"])
+        sc.run_saved_search(rec, sweep=sweep)
+        second = sc.run_saved_search(sc.load_searches()[0], sweep=sweep)
+        _, rows = self.csv_rows(second)
+        self.assertEqual({r["item_id"]: r[storage.FIRST_FOUND] for r in rows},
+                         {"a": "2026-08-01T09:00:00+00:00",
+                          "b": "2026-08-01T09:00:00+00:00"})
+
+    def test_no_date_may_predate_the_search_that_is_showing_it(self):
+        # The archive is shared between searches. An older search having found
+        # this listing in June is not this search's history, and a gallery
+        # claiming it was found before the search existed is simply wrong.
+        old = self.make(name="Older search", interval={"every": 5, "unit": "minutes"})
+        sc.run_saved_search(old, sweep=self.stub_sweep(
+            [(self.batch("a"), [])], starts=["2026-06-01T09:00:00+00:00"]))
+        new = self.make(name="Newer search", interval={"every": 5, "unit": "minutes"})
+        sweep = self.stub_sweep(
+            [(self.batch("a", "z"), []), (self.batch("a", "z"), [])],
+            starts=["2026-08-01T09:00:00+00:00", "2026-08-08T09:00:00+00:00"])
+        sc.run_saved_search(new, sweep=sweep)
+        second = sc.run_saved_search(
+            sc.find_search(sc.load_searches(), new["id"]), sweep=sweep)
+        _, rows = self.csv_rows(second)
+        self.assertEqual({r["item_id"]: r[storage.FIRST_FOUND] for r in rows},
+                         {"a": "2026-08-01T09:00:00+00:00",
+                          "z": "2026-08-01T09:00:00+00:00"})
 
     def test_scheduled_runs_only_describe_new_listings(self):
         self.two_runs(self.batch("a", "b", "c", "d"))

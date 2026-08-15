@@ -98,6 +98,10 @@ __TOKENS__
     border: 1px solid var(--rule); border-radius: 2px;
     box-shadow: 0 10px 26px rgba(0, 0, 0, .55);
   }
+  /* Sort is the last control in the header, so its menu is the widest one with
+     the least room to the right of it. Hang it off the button's right edge and
+     it opens inwards instead of off the side of the page. */
+  #sort .sel-list { left: auto; right: 0; }
   .sel-list li {
     padding: 7px 12px; font: 13px var(--type); white-space: nowrap;
     border-radius: 2px; cursor: pointer;
@@ -189,6 +193,14 @@ __TOKENS__
   .meta {
     color: var(--ink-soft); font-family: var(--type); font-size: 10.5px;
     letter-spacing: .1em; text-transform: uppercase;
+  }
+  /* One notch quieter than the location above it: where a listing is is what
+     you read first, when it turned up is what you check. Tracked tighter than
+     the rest of the small type because it is the longest line on the card, and
+     at the narrowest a column ever gets it would otherwise wrap onto a second
+     line for the sake of its last two characters. */
+  .meta.found {
+    color: #8B8368; margin-top: -3px; font-size: 10px; letter-spacing: .02em;
   }
   .desc {
     color: #BDB49B; font-size: 12.5px; white-space: pre-line; cursor: pointer;
@@ -303,16 +315,27 @@ __TOKENS__
     r._i = i;
     r._price = parseFloat((r.price || '').replace(/[^0-9.]/g, '')) || 0;
     r._year = yearOf(r.title);
+    r._found = Date.parse(r.first_found || '') || null;
     r._hay = ((r.title || '') + ' ' + (r.description || '') + ' ' +
               (r.listing_location || '')).toLowerCase();
   });
-  // Undated listings always sit at the bottom, whichever direction we sort.
-  const byYear = dir => (a, b) => {
-    if (a._year === null || b._year === null) {
-      return (a._year === null) - (b._year === null) || a._i - b._i;
+  // Listings with nothing to sort on always sit at the bottom, whichever
+  // direction we sort. dir 1 puts the largest value first.
+  const byNumber = (key, dir) => (a, b) => {
+    if (a[key] === null || b[key] === null) {
+      return (a[key] === null) - (b[key] === null) || a._i - b._i;
     }
-    return dir * (b._year - a._year) || a._i - b._i;
+    return dir * (b[key] - a[key]) || a._i - b._i;
   };
+  // The start of the sweep that first turned this listing up, shown on the
+  // clock of whoever is reading: a sweep stamps UTC, and a gallery gets emailed
+  // around, so "found at 19:50" has to mean something wherever it lands.
+  const FOUND_FMT = new Intl.DateTimeFormat(undefined, {
+    month: 'short', day: 'numeric', year: 'numeric',
+    hour: 'numeric', minute: '2-digit',
+  });
+  const foundText = r =>
+    r._found ? `First found ${FOUND_FMT.format(r._found)}` : '';
   const esc = s => (s || '').replace(/[&<>"]/g,
     m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
 
@@ -375,12 +398,19 @@ __TOKENS__
   const cityCtl = makeSelect(document.getElementById('city'),
     [{ value: '', label: 'All searched cities' },
      ...cities.map(c => ({ value: c, label: c }))], () => render());
+  // The first-found options come and go with the dates themselves. Only a
+  // scheduled search on its second run or later has any, and an option that
+  // could not reorder anything is a promise the page can't keep.
   const sortCtl = makeSelect(document.getElementById('sort'), [
     { value: 'default', label: 'Original order' },
     { value: 'price-asc', label: 'Price: low → high' },
     { value: 'price-desc', label: 'Price: high → low' },
     { value: 'year-desc', label: 'Year: newest first' },
     { value: 'year-asc', label: 'Year: oldest first' },
+    ...(rows.some(r => r._found)
+        ? [{ value: 'found-desc', label: 'First found: newest first' },
+           { value: 'found-asc', label: 'First found: oldest first' }]
+        : []),
     { value: 'title', label: 'Title A→Z' },
   ], () => render());
 
@@ -421,6 +451,7 @@ __TOKENS__
     const isHidden = hidden.has(r.item_id);
     const isStarred = starred.has(r.item_id);
     const meta = [r.listing_location, r.miles].filter(Boolean).join(' · ');
+    const found = foundText(r);
     return `<div class="card${isStarred ? ' is-starred' : ''}${isHidden ? ' is-hidden' : ''}"
                  data-i="${r._i}" tabindex="0">
       <div class="imgwrap">${imgTag(r, true)}
@@ -438,6 +469,7 @@ __TOKENS__
         <div class="price">${esc(r.price) || '—'}</div>
         <div class="title">${esc(r.title) || '(no title)'}</div>
         <div class="meta">${esc(meta)}</div>
+        ${found ? `<div class="meta found">${esc(found)}</div>` : ''}
         ${r.description ? `<div class="desc">${esc(r.description)}</div>` : ''}
         <div class="foot"><a href="${esc(r.url)}" target="_blank" rel="noopener">
           View on Facebook ↗</a></div>
@@ -451,9 +483,13 @@ __TOKENS__
 
   function openSheet(r) {
     const meta = [r.listing_location, r.miles].filter(Boolean).join(' · ');
-    const found = [r.location_searched && `found in ${r.location_searched} sweep`,
+    const found = foundText(r);
+    // scraped_at is the last time this listing was seen, which next to a first
+    // found line above would otherwise read as a second, contradictory date.
+    const where = [r.location_searched && `found in ${r.location_searched} sweep`,
                    r.query && `query “${r.query}”`,
-                   (r.scraped_at || '').slice(0, 10)].filter(Boolean).join(' · ');
+                   r.scraped_at && `last seen ${r.scraped_at.slice(0, 10)}`]
+      .filter(Boolean).join(' · ');
     sheet.innerHTML = `
       <div class="sheet-img">${imgTag(r, false)}</div>
       <div class="sheet-body">
@@ -461,10 +497,11 @@ __TOKENS__
         <div class="price">${esc(r.price) || '—'}</div>
         <div class="title" id="sheetTitle">${esc(r.title) || '(no title)'}</div>
         <div class="meta">${esc(meta)}</div>
+        ${found ? `<div class="meta found">${esc(found)}</div>` : ''}
         ${r.description
           ? `<div class="sheet-desc"><span class="lbl">Description</span>${esc(r.description)}</div>`
           : `<div class="sheet-none">No description captured</div>`}
-        ${found ? `<div class="meta">${esc(found)}</div>` : ''}
+        ${where ? `<div class="meta">${esc(where)}</div>` : ''}
         <div class="foot"><a href="${esc(r.url)}" target="_blank" rel="noopener">
           View on Facebook ↗</a></div>
       </div>`;
@@ -547,8 +584,10 @@ __TOKENS__
     if (!showHidden) out = out.filter(r => !hidden.has(r.item_id));
     if (sort === 'price-asc') out.sort((a, b) => a._price - b._price);
     else if (sort === 'price-desc') out.sort((a, b) => b._price - a._price);
-    else if (sort === 'year-desc') out.sort(byYear(1));
-    else if (sort === 'year-asc') out.sort(byYear(-1));
+    else if (sort === 'year-desc') out.sort(byNumber('_year', 1));
+    else if (sort === 'year-asc') out.sort(byNumber('_year', -1));
+    else if (sort === 'found-desc') out.sort(byNumber('_found', 1));
+    else if (sort === 'found-asc') out.sort(byNumber('_found', -1));
     else if (sort === 'title') out.sort((a, b) => (a.title || '').localeCompare(b.title || ''));
     else out.sort((a, b) => a._i - b._i);
     // Starred listings lead every sort. Array#sort is stable, so within the

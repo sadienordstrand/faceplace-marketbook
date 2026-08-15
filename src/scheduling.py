@@ -965,6 +965,32 @@ def previous_item_ids(con, search_id):
         "SELECT item_id FROM run_items WHERE run_id=?", (row[0],))]
 
 
+def first_found_by_item(con, search_id):
+    """When *this* search first turned up each listing it has ever seen.
+
+    Per search, and that is the whole point. The archive is shared across every
+    search on the machine, so a listing another search found in June is not
+    something this one found in June — a date from before the search existed is
+    worse than no date at all. run_items already records which listings made up
+    each run and search_runs when each run began, so the earliest run of this
+    search that carried a listing is the answer, and it can't predate the
+    search's first run.
+
+    Returns None until the search has a completed run behind it, which tells the
+    sweep to leave the column out altogether: on a first run every listing was
+    found just now, and a whole column saying so is noise on every card."""
+    prior = con.execute(
+        "SELECT count(*) FROM search_runs WHERE search_id=? AND status='ok'",
+        (search_id,)).fetchone()[0]
+    if not prior:
+        return None
+    return {r[0]: r[1] for r in con.execute(
+        "SELECT ri.item_id, MIN(sr.started) FROM run_items ri "
+        "JOIN search_runs sr ON sr.run_id = ri.run_id "
+        "WHERE sr.search_id=? AND sr.status='ok' AND COALESCE(sr.started,'') <> '' "
+        "GROUP BY ri.item_id", (search_id,))}
+
+
 def rows_for_ids(con, item_ids, fields):
     out, ids = [], list(item_ids)
     for i in range(0, len(ids), 400):
@@ -1407,8 +1433,10 @@ def build_attachments(csv_path, new_ids, out_dir=None):
         if ids is not None and not ids:
             continue
         path = out_dir / name
+        # The new-listings gallery is every listing this run found, so a
+        # first-found date on it is this run's start on every single card.
         build_gallery.build(csv_path, path, images=False, only_ids=ids,
-                            quiet=True)
+                            quiet=True, dates=ids is None)
         built.append({"name": name, "path": path, "ids": ids,
                       "size": path.stat().st_size})
     return [(b["name"], b["path"].read_bytes(), "html") for b in built], built
@@ -1498,6 +1526,7 @@ def run_saved_search(search, email_cfg=None, sweep=None, send=True, now=None,
         interval_hrs = interval_hours(search.get("interval") or {})
         stale = set(needs_verifying(con, prev_ids, interval_hrs))
         prev_rows = rows_for_ids(con, prev_ids, storage.FIELDS)
+        first_found = first_found_by_item(con, search["id"])
         # Anything checked within the last interval is carried forward without
         # being probed again; only the rest is handed to the verifier.
         for r in prev_rows:
@@ -1541,7 +1570,8 @@ def run_saved_search(search, email_cfg=None, sweep=None, send=True, now=None,
             radius_miles=search.get("radius_miles"),
             limit=search.get("limit"),
             only_labels=search.get("cities"), open_gallery=False,
-            run_dir=run_dir, previous_rows=prev_rows, describe_new_only=True,
+            run_dir=run_dir, previous_rows=prev_rows, first_found=first_found,
+            describe_new_only=True,
             verifier=verify_only_stale, login_wait=60, unattended=True)
 
         if not summary or summary.get("status") != "ok":

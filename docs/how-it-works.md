@@ -486,6 +486,9 @@ vehicle sellers put it and no listing field carries it. The first `19xx`/`20xx`
 match bounded to 1900..next year wins, which keeps trim and spec numbers ("2500
 lb winch") from reading as years, and listings with no year sort to the bottom in
 *both* directions, since "no year" is missing data rather than an extreme value.
+**First-found sorting** works the same way, off the `first_found` column, and is
+offered only by the galleries that have one (see
+[When a listing was first found](#when-a-listing-was-first-found)).
 **Hiding** a card with the cross in its top right corner is remembered by listing
 id in local storage, so it survives sorting, reloads, and even rebuilding the
 file from a later sweep. **Starring** one with the star in the opposite corner
@@ -495,6 +498,48 @@ holds within each group. The two are opposite verdicts, so starring a card
 unhides it and hiding one unstars it. Both marks are inline SVG rather than the
 `★`/`✕` characters, which aren't in either of the page's typefaces and so would
 arrive from an OS fallback font at about half the size asked for.
+
+### When a listing was first found
+
+A scheduled search's gallery carries, under the location and above the
+description, the moment **that search** first turned each listing up — the start
+of the run rather than the moment the card was scraped, since a sweep of a dozen
+cities runs for an hour and "found in the sweep that began at 9pm" is the
+answer, not an hour's worth of slightly different timestamps for one search. The
+detail panel repeats it.
+
+**Per search, and that is the entire difficulty.** The `listings` table is one
+shared archive across every search on the machine, so there is nowhere in it to
+put this: the same listing has a different answer under every search that has
+ever seen it, and a new search inheriting a date from an older one would show
+listings found before that search existed. So `first_found` is the one column a
+run's CSV carries that the archive does not, and `FIELDS` — which is otherwise
+exactly both — stays exactly the `listings` table.
+
+It needs no new bookkeeping. `run_items` already records which listings made up
+each run and `search_runs` when each run began, so
+`scheduling.first_found_by_item()` is one grouped `MIN` over that search's
+successful runs. A date from it cannot predate the search's own first run,
+because it *is* one of that search's run start times. Anything the map doesn't
+know is new to the search as of now and gets this run's start.
+
+The same function decides whether the column exists at all: it returns `None`
+until the search has a completed run behind it, and `run()` writes the column
+only when it is handed a map. So a one-off run and a saved search's first run
+produce a gallery with no dates in it — on those, every listing was found by the
+run that built the page, and a line saying so on every card is noise. The page
+takes its cue from the data rather than a flag: no row has a date, so no card
+shows the line and the sort menu doesn't offer the option, which would otherwise
+be an option that reorders nothing.
+
+The emailed *new listings* attachment is built with `dates=False` for the same
+reason one level down: everything in it is new as of this run, so the column
+would be one timestamp repeated the length of the page. The *all results*
+attachment keeps it, since there the dates differ and are the point.
+
+`scraped_at` is the opposite quantity, the last time a listing was seen, which is
+why the detail panel labels it *last seen*: two bare dates in one panel, one of
+them the reverse of the other, is exactly the confusion worth spending a word on.
 
 ### Getting back to one
 
@@ -952,7 +997,12 @@ mis-wired button or a window close racing a submit. One thing it structurally
 cannot see is the window itself: headless Chromium has no address bar, no tab
 strip and no title bar, so whether the `--app` flag took — and with it, whether
 the keyboard lands in the page or in an omnibox — only shows up in a real
-launch. `tests/test_past_runs.py`
+launch. `tests/test_gallery_ui.py` does the same for a gallery built from a CSV
+written a few lines above it — the page keeps all of its behaviour inline, so
+building one and opening it is the only honest way to test it. The browser is
+given a fixed time zone and locale, since the page shows first-found times on
+the reader's own clock and a test that let the machine decide would pass or fail
+by where it ran. `tests/test_past_runs.py`
 builds run folders in a temporary directory — with a manifest, without one, and
 with a `history/` — and replaces `webbrowser.open`, so nothing opens a window on
 whoever is running the suite. `tests/test_updater.py`

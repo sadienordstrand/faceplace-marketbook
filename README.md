@@ -62,7 +62,8 @@ you acknowledge and accept this risk.
 ## Overview
 
 Every search builds a gallery like this, saved on your computer. You can search
-it, sort by price or year, filter by city, star your favorite listings, and hide anything you don't want to see again.
+it, sort by price or year, filter by city, star your favorite listings, and hide
+anything you don't want to see again.
 
 ![The gallery a run produces](docs/images/gallery.jpg)
 

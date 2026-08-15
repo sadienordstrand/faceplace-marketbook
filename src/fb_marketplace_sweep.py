@@ -559,7 +559,8 @@ def run(query, scrolls, exact, out_csv=None, only=None, keep_all=False,
         exclude=(), min_price=None, max_price=None, min_year=None, max_year=None,
         include_no_year=True, radius_miles=None,
         only_labels=None, open_gallery=True,
-        run_dir=None, previous_rows=None, describe_new_only=False, verifier=None,
+        run_dir=None, previous_rows=None, first_found=None,
+        describe_new_only=False, verifier=None,
         login_wait=None, unattended=False):
     """One pass over everything: sweep every saved city, visit each kept
     listing's detail page at most once for its description and full-size photo,
@@ -583,6 +584,7 @@ def run(query, scrolls, exact, out_csv=None, only=None, keep_all=False,
 
     A scheduled search passes the extra arguments: run_dir to write into
     the same folder every time, previous_rows for what the last run found,
+    first_found for when that search first saw each of them,
     describe_new_only so old listings aren't re-fetched, and verifier to check
     whether the listings that stopped appearing are actually gone. Returns a
     summary dict; interactive callers ignore it."""
@@ -984,7 +986,15 @@ def run(query, scrolls, exact, out_csv=None, only=None, keep_all=False,
               f"Writing the {len(rows)} listing"
               f"{'' if len(rows) == 1 else 's'} already found, then the "
               f"gallery.")
-    storage.write_csv(rows, out_path)
+    fields = storage.FIELDS
+    if first_found is not None:
+        # Only a scheduled search with a run behind it gets this column, and the
+        # dates in it are that search's own — see scheduling.first_found_by_item.
+        # Anything the map doesn't know is new to the search as of this run.
+        for r in rows:
+            r[storage.FIRST_FOUND] = first_found.get(r["item_id"]) or started_iso
+        fields = storage.FIELDS + [storage.FIRST_FOUND]
+    storage.write_csv(rows, out_path, fields)
     print(f"\nWrote {out_path} and {storage.DB_PATH}")
     gallery, gallery_path, light_gallery = None, None, None
     if do_gallery and rows:

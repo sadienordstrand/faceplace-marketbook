@@ -22,6 +22,14 @@ FIELDS = ["item_id", "title", "price", "url", "image", "listing_location", "mile
           "description", "source_section", "matches_query", "location_searched",
           "query", "scraped_at", "raw_text"]
 
+# A run's CSV can carry one column the `listings` table deliberately does not:
+# when the search that produced it first turned each listing up. It is a fact
+# about a search rather than about a listing — the archive is shared, so the
+# same listing has a different answer under every search that has seen it — and
+# there is nowhere in a table keyed by item_id to put it. See
+# scheduling.first_found_by_item().
+FIRST_FOUND = "first_found"
+
 
 def write_csv(rows, path, fields=FIELDS):
     with open(path, "w", newline="", encoding="utf-8") as f:
