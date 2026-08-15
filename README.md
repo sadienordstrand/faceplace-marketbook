@@ -178,13 +178,7 @@ Once the app opens, try running a search.
    Search right now — that will be covered later.
 2. Click **Start Search**. Facebook will automatically open in a new window.
 3. Log into Facebook as you normally would, including any two-factor code or
-   captcha. The app will automatically take you to Marketplace.
-4. Dismiss any popups from Facebook. Then, click the location button in the
-   left sidebar and set the radius you want to search around each city. The
-   twelve built-in cities are spaced so that a 500-mile radius will cover the
-   entire continental US; a smaller radius is fine if you only care about
-   listings near the cities you picked.
-5. Return to the terminal window and press Enter to start the search.
+   captcha. The app will automatically go to Marketplace and start searching.
 
 ## While it runs
 
@@ -432,8 +426,7 @@ the mail server is asked, and a scheduled run that can't send has no way to tell
 you by email. Your results are still on your computer either way.
 
 **Hardly any results, or none.** Usually the search term is too specific, or the
-excluded terms are too broad. Try fewer words. The other likely cause is the
-search radius. Run it again and raise your search radius setting in Facebook.
+excluded terms are too broad. Try fewer words, or a wider search radius.
 
 **Some pictures say "image expired".** Facebook's photo links go stale within
 hours. The app saves photos as it goes to avoid this, but a few can slip through

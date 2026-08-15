@@ -297,6 +297,34 @@ class TestSavedSearchCRUD(Redirected):
                 self.assertIsNone(rec)
                 self.assertIn(expect, err)
 
+    # -- the search radius ---------------------------------------------------
+    def test_a_radius_survives_a_save_and_a_reload(self):
+        self.make(radius_miles=20)
+        self.assertEqual(sc.load_searches()[0]["radius_miles"], 20)
+
+    def test_a_search_saved_before_radius_existed_reads_as_500(self):
+        # There is no migration. normalize_search fills it on every read and
+        # every write, which repairs a hand-edited file as readily as an old
+        # one, and 500 is the maximum the shipped city spacing assumes — so the
+        # fallback errs wide rather than silently narrow.
+        self.assertEqual(sc.normalize_search({"query": "x"})["radius_miles"],
+                         500)
+
+    def test_an_explicit_null_radius_is_filled_the_same_way(self):
+        # A hand-edited file can hold either, and {**defaults, **search} keeps
+        # the null.
+        self.assertEqual(
+            sc.normalize_search({"query": "x", "radius_miles": None})["radius_miles"],
+            500)
+
+    def test_a_radius_facebook_does_not_offer_is_refused(self):
+        # Facebook's picker is a fixed list. A radius it has no option for would
+        # leave whatever was already set, and the run would look fine.
+        rec, err = sc.add_search({"name": "n", "query": "q",
+                                  "cities": ["Medford, OR"], "radius_miles": 137})
+        self.assertIsNone(rec)
+        self.assertIn("search radius has to be one of", err)
+
     def test_editing_keeps_the_id_and_retimes_the_next_run(self):
         rec = self.make()
         updated, err = sc.update_search(
@@ -1738,7 +1766,19 @@ class TestWakeQueue(Redirected):
                          "pmset repeat wakeorpoweron MTWRFSU 05:00:00")
         self.assertTrue(any(l.startswith("pmset schedule wake")
                             for l in lines[1:]))
-        self.assertIn("5am", msg)
+        self.assertEqual(msg, "Your Mac will wake itself for searches "
+                              "scheduled multiple times a day.")
+
+    def test_the_queue_end_date_is_joined_onto_the_sentence(self):
+        # Nothing had been written yet above, so that message ends at the full
+        # stop. Once there is a queue to report, the date is glued on — and it
+        # read "...multiple times a dayuntil Sunday, August 9" for a while.
+        self.hourly(6)
+        now = dt("2026-08-06T12:00:00")
+        self.on_machine = [now + timedelta(days=n) for n in (1, 2, 3)]
+        msg = sc.set_wakes(now=now)
+        self.assertIn(f"multiple times a day until "
+                      f"{now + timedelta(days=3):%A, %B %-d}.", msg)
 
     def test_turning_them_off_takes_the_wake_ups_along(self):
         self.on_machine = [dt("2026-08-07T17:00:00")]
@@ -2219,10 +2259,12 @@ class TestScheduledPipeline(Redirected):
         self.assertEqual(self.calls[1]["previous_rows"] and 1, 1)
 
     def test_scheduled_runs_never_wait_for_a_human(self):
+        # No run pauses for one any more, so the only thing left to get wrong is
+        # a login that sits at the screen forever and a gallery opening on an
+        # empty desk at 5am.
         self.two_runs(self.batch("a"))
         for kwargs in self.calls:
             self.assertTrue(kwargs["unattended"])
-            self.assertTrue(kwargs["no_pause"])
             self.assertFalse(kwargs["open_gallery"])
             self.assertEqual(kwargs["login_wait"], 60)
 
@@ -2299,6 +2341,49 @@ class TestScheduledPipeline(Redirected):
         warnings = summary["report"]["warnings"]
         self.assertTrue(any("250 miles" in w for w in warnings))
         self.assertIn("Heads up", summary["report"]["html"])
+
+    def test_a_radius_that_would_not_take_is_reported_as_the_wrong_distance(self):
+        # The only failure this feature has that looks like success: the run
+        # finishes, the email arrives, and the listings are from the wrong
+        # radius. Nothing but this warning would say so.
+        rec = self.make(radius_miles=20)
+        sweep = self.stub_sweep([(self.batch("a"), [])])
+
+        def wrong_radius(*a, **kw):
+            out = sweep(*a, **kw)
+            out["radius_requested_miles"], out["radius_miles"] = 20, 500
+            return out
+        summary = sc.run_saved_search(rec, sweep=wrong_radius)
+        self.assertEqual(summary["status"], "ok")
+        warnings = summary["report"]["warnings"]
+        self.assertTrue(any("asks for a 20-mile radius" in w for w in warnings))
+        self.assertTrue(any("searched 500 miles" in w for w in warnings))
+        self.assertIn("Heads up", summary["report"]["html"])
+
+    def test_a_radius_that_took_says_nothing_at_all(self):
+        rec = self.make(radius_miles=20)
+        sweep = self.stub_sweep([(self.batch("a"), [])])
+
+        def right_radius(*a, **kw):
+            out = sweep(*a, **kw)
+            out["radius_requested_miles"], out["radius_miles"] = 20, 20
+            # A 20-mile search is deliberately short, so the old "under 500"
+            # warning must not fire for it.
+            out["radius_km"] = 32
+            return out
+        summary = sc.run_saved_search(rec, sweep=right_radius)
+        self.assertEqual(summary["report"]["warnings"], [])
+
+    def test_the_radius_reaches_the_sweep(self):
+        rec = self.make(radius_miles=250)
+        seen = {}
+        sweep = self.stub_sweep([(self.batch("a"), [])])
+
+        def watch(*a, **kw):
+            seen.update(kw)
+            return sweep(*a, **kw)
+        sc.run_saved_search(rec, sweep=watch)
+        self.assertEqual(seen["radius_miles"], 250)
 
     def test_a_late_run_says_the_machine_was_probably_asleep(self):
         rec = self.make()

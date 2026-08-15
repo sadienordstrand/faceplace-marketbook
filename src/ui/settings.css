@@ -216,6 +216,13 @@
     background-size: 5px 5px, 5px 5px; background-repeat: no-repeat;
   }
   select:focus { outline: none; border-color: var(--accent); }
+  /* The radius is a number and a unit rather than a phrase, so the menu holds
+     only the numbers and is sized for them — a full-width box for "500" reads
+     as though something longer were coming. */
+  .radius { display: flex; gap: 10px; align-items: center; }
+  .radius select { width: auto; }
+  .radius .mi { font-family: var(--type); font-size: 11pt; color: var(--ink-soft); }
+
   .every { display: flex; gap: 12px; align-items: flex-start; }
   .every .num { flex: 0 0 110px; }
   .every .unit { flex: 0 0 190px; }

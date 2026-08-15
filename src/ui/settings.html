@@ -74,7 +74,7 @@ __UPDATE_BAR__
         <button class="mini" id="noCities">None</button>
       </div>
     </div>
-    <div class="hint" style="margin: 0 0 14px">The search spans as far as your Facebook radius setting allows — up to 500 miles around each selected city. To get search results from the entire continental US, select all 12 cities and set your radius in Facebook to 500 miles.</div>
+    <div class="hint" style="margin: 0 0 14px">Each city is searched outwards as far as the radius you choose below. To get search results from the entire continental US, select all 12 cities and choose a 500-mile radius.</div>
     <div class="cities" id="cities"></div>
 
     <div class="addcity">
@@ -94,13 +94,36 @@ __UPDATE_BAR__
             in your browser.</li>
           <li>Click the location on the left sidebar — it shows whatever
             city you're currently browsing.</li>
-          <li>Type the city you want, pick it from the list, set the radius you
-            want, and click Apply.</li>
+          <li>Type the city you want, pick it from the list, and click
+            Apply.</li>
           <li>Copy the full URL out of the address bar and paste it in
             the box above.</li>
         </ol>
       </div>
     </details>
+  </section>
+
+  <section>
+    <h2>Search radius</h2>
+    <label class="field"><span class="lab">Distance from each city</span>
+      <div class="radius">
+        <select id="radius_miles">
+          <option value="" selected disabled>—</option>
+          <option value="1">1</option>
+          <option value="2">2</option>
+          <option value="5">5</option>
+          <option value="10">10</option>
+          <option value="20">20</option>
+          <option value="40">40</option>
+          <option value="60">60</option>
+          <option value="80">80</option>
+          <option value="100">100</option>
+          <option value="250">250</option>
+          <option value="500">500</option>
+        </select>
+        <span class="mi">miles</span>
+      </div>
+    </label>
   </section>
 
   <section>

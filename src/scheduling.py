@@ -264,6 +264,7 @@ DEFAULT_SEARCH = {
     "min_year": None,
     "max_year": None,
     "include_no_year": True,
+    "radius_miles": None,
     "exclude": "",
     "do_descriptions": True,
     "do_thumbs": True,
@@ -281,16 +282,29 @@ def slugify(s):
     return re.sub(r"[^a-z0-9]+", "_", (s or "").lower()).strip("_") or "search"
 
 
+# What a search without a radius is taken to mean. The settings window requires
+# one and offers no default, so this is only ever reached by a search saved
+# before the field existed or edited by hand — and 500, Facebook's maximum, is
+# what the shipped city spacing already assumes. It errs toward searching wider
+# than intended rather than quietly narrower, which is the failure that has no
+# symptom: a run that misses listings looks exactly like one that found none.
+DEFAULT_RADIUS_MILES = 500
+
+
 def normalize_search(search):
     """Fill in the defaults, and settle what this search is looking for.
 
     `queries` is the authority and `query` is derived from it, so the two can
     never drift apart. A search saved before queries existed, or one edited by
-    hand with only a query in it, gets its list from that single line."""
+    hand with only a query in it, gets its list from that single line. A search
+    from before radius existed is filled the same way — absent and null alike,
+    since a hand-edited file can hold either."""
     rec = {**DEFAULT_SEARCH, **search}
     rec["queries"] = listings.query_list(
         rec.get("queries") or rec.get("query"))[:listings.MAX_QUERIES]
     rec["query"] = listings.query_label(rec["queries"])
+    if rec.get("radius_miles") is None:
+        rec["radius_miles"] = DEFAULT_RADIUS_MILES
     return rec
 
 
@@ -350,6 +364,16 @@ def validate_bounds(search):
             return f"Years have to be between {listings.EARLIEST_YEAR} and {latest}."
     if lo_y is not None and hi_y is not None and lo_y > hi_y:
         return "The minimum year is later than the maximum year."
+    # Facebook's picker offers a fixed list, and asking for anything else means
+    # the run would silently keep whatever radius was already set. Imported here
+    # rather than at the top for the usual reason in this file: the sweep
+    # imports us, so we can only reach back into it once something calls in.
+    import fb_marketplace_sweep as fb
+
+    r = search.get("radius_miles")
+    if r is not None and r not in fb.RADIUS_CHOICES_MILES:
+        return ("The search radius has to be one of "
+                + ", ".join(str(m) for m in fb.RADIUS_CHOICES_MILES) + " miles.")
     return None
 
 
@@ -1514,8 +1538,9 @@ def run_saved_search(search, email_cfg=None, sweep=None, send=True, now=None,
             min_price=search.get("min_price"), max_price=search.get("max_price"),
             min_year=search.get("min_year"), max_year=search.get("max_year"),
             include_no_year=search.get("include_no_year", True),
+            radius_miles=search.get("radius_miles"),
             limit=search.get("limit"),
-            only_labels=search.get("cities"), open_gallery=False, no_pause=True,
+            only_labels=search.get("cities"), open_gallery=False,
             run_dir=run_dir, previous_rows=prev_rows, describe_new_only=True,
             verifier=verify_only_stale, login_wait=60, unattended=True)
 
@@ -1537,7 +1562,22 @@ def run_saved_search(search, email_cfg=None, sweep=None, send=True, now=None,
                 f"time. Nothing was lost — it ran as soon as the machine was "
                 f"available again.")
         km = summary.get("radius_km")
-        if km and km < fb.EXPECTED_RADIUS_KM:
+        want = summary.get("radius_requested_miles")
+        got = summary.get("radius_miles")
+        if want and got != want:
+            # The one failure this feature can produce that looks like success.
+            # Facebook's radius control is a custom widget with no stable
+            # selectors, so when it moves, the run still finishes and still
+            # emails results — they are just from the wrong distance, and
+            # nothing but this line would say so.
+            warnings.append(
+                f"This search asks for a {want}-mile radius, but Facebook's "
+                f"radius control didn't take it. The run searched "
+                f"{f'{got} miles' if got else 'whatever radius was already set'} "
+                f"around each city instead, so these results cover the wrong "
+                f"distance. Facebook rearranges that control from time to time; "
+                f"if this keeps happening, please reach out so we can fix it.")
+        elif not want and km and km < fb.EXPECTED_RADIUS_KM:
             warnings.append(
                 f"Your Marketplace search radius is set to about "
                 f"{round(km / 1.609)} miles, rather than the 500 Facebook "
@@ -1956,10 +1996,10 @@ def set_wakes(now=None):
                 f"and run:\n"
                 f"    sudo pmset repeat wakeorpoweron MTWRFSU "
                 f"{DAILY_HOUR:02d}:00:00")
-    msg = f"Your Mac will wake itself for searches scheduled multiple times a day"
+    msg = "Your Mac will wake itself for searches that are scheduled for multiple times a day"
     state = wake_queue_state(now)
     if state.get("relevant") and state.get("until"):
-        msg += (f"until {parse_iso(state['until']):%A, %B %-d}.")
+        msg += f" until {parse_iso(state['until']):%A, %B %-d}."
     else:
         msg += "."
     return msg
@@ -2298,9 +2338,9 @@ def _win_settings_done(wake_text=None, lid_text=None):
 # (debug_dump) is about one interactive run and has no meaning for something
 # that runs unattended at 5am.
 SAVED_FIELDS = ("queries", "query", "cities", "exact", "min_price", "max_price",
-                "min_year", "max_year", "include_no_year", "exclude",
-                "do_descriptions", "do_thumbs", "pace", "limit", "interval",
-                "email_to", "name", "enabled")
+                "min_year", "max_year", "include_no_year", "radius_miles",
+                "exclude", "do_descriptions", "do_thumbs", "pace", "limit",
+                "interval", "email_to", "name", "enabled")
 
 
 def searches_for_ui():

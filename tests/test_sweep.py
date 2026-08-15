@@ -193,7 +193,13 @@ class SweepHarness(Patched):
         self.patch(fb, "keep_awake", lambda: _Nothing())
         self.patch(fb, "launch_context", lambda p: self.ctx)
         self.patch(fb, "ensure_logged_in", lambda page, **kw: None)
-        self.patch(fb, "preflight_pause", lambda page, url, skip=False: 805)
+        self.patch(fb, "preflight", lambda page, url: 805)
+        # Reading the account's location and putting it back are courtesies
+        # either side of the work, and they navigate. These tests count
+        # navigations to place an interruption exactly, so they stub out --
+        # TestRadius covers them on their own.
+        self.patch(fb, "snapshot_place", lambda page: None)
+        self.patch(fb, "restore_place", lambda page, snap: None)
         self.patch(fb, "goto_with_retry", lambda page, url: True)
         self.patch(fb, "city_was_dropped", lambda page, seg: False)
         self.patch(fb, "human_pause", lambda *a, **k: None)
@@ -231,7 +237,7 @@ class SweepHarness(Patched):
 
     def sweep(self, **kw):
         return self.quietly(fb.run, "defender", 5, False, open_gallery=False,
-                            no_pause=True, **kw)
+                            **kw)
 
     def ids_in_csv(self, summary):
         with open(summary["csv"], newline="", encoding="utf-8") as f:
@@ -376,7 +382,7 @@ class TestClosingTheBrowserWindow(SweepHarness):
 class TestNamingTheRunFolder(SweepHarness):
     def folder(self, queries):
         return Path(self.quietly(
-            fb.run, queries, 5, False, open_gallery=False, no_pause=True,
+            fb.run, queries, 5, False, open_gallery=False,
             only_labels=["Medford, OR"])["run_dir"]).name
 
     def test_one_query_names_the_folder(self):
@@ -392,7 +398,7 @@ class TestNamingTheRunFolder(SweepHarness):
 
     def test_the_whole_search_is_still_written_down(self):
         summary = self.quietly(fb.run, ["defender 110", "land rover 90"], 5,
-                               False, open_gallery=False, no_pause=True,
+                               False, open_gallery=False,
                                only_labels=["Medford, OR"])
         self.assertEqual(self.manifest(summary)["query"],
                          "defender 110 OR land rover 90")
@@ -408,7 +414,6 @@ class Args:
     match = None
     thumbs_dir = "thumbnails"
     no_open = False
-    no_pause = True
 
 
 class FakePage:
@@ -589,6 +594,251 @@ class TestQuittingLeavesNothingBehind(unittest.TestCase):
         # the smaller harm by a wide margin.
         script = self.launcher("Start Faceplace Marketbook (Mac).command")
         self.assertIn("(count of panes) is 1", script)
+
+
+# ------------------------------------------------------------- the search radius
+class RadiusPage:
+    """A page that answers about its location control the way Facebook's does.
+
+    The two things the app reads are the control's accessible name, which spells
+    the radius out in miles, and the buy_location payload, which carries the id
+    used to navigate back. `stubborn` is a control that accepts the clicks and
+    changes nothing, which is what a moved selector looks like from here."""
+
+    def __init__(self, place="Provo, Utah", pid="106066949424984", miles=100,
+                 stubborn=False):
+        self.place, self.pid, self.miles = place, pid, miles
+        self.stubborn, self.applied, self.clicks = stubborn, 0, []
+        self.pending, self.asked_for = None, []
+
+    # -- what the app reads --------------------------------------------------
+    def query_selector(self, selector):
+        return self if selector == fb.LOCATION_BUTTON else None
+
+    def get_attribute(self, name):
+        return f"Location: {self.place}, Within {self.miles} mi"
+
+    def content(self):
+        return ('...,"buy_location":{"display_name":"' + self.place
+                + '","id":"' + self.pid + '"}},...')
+
+    # -- what the app does to it ---------------------------------------------
+    def click(self, selector, timeout=None):
+        self.clicks.append(selector)
+        if selector == fb.APPLY_BUTTON:
+            self.applied += 1
+            if not self.stubborn and self.pending is not None:
+                self.miles = self.pending
+
+    def get_by_role(self, role, name=None, exact=False):
+        # Chosen by its exact text, which is how the real listbox is addressed,
+        # so the singular '1 mile' has to arrive spelled correctly.
+        self.asked_for.append(name)
+        return _Option(self, name)
+
+    class _Keyboard:
+        def press(self, key):
+            pass
+    keyboard = _Keyboard()
+
+
+class _Option:
+    """What get_by_role hands back: a locator, clicked without a selector."""
+
+    def __init__(self, page, name):
+        self.page, self.name = page, name
+
+    @property
+    def first(self):
+        return self
+
+    def click(self, timeout=None):
+        self.page.pending = int(self.name.split()[0])
+
+
+class TestReadingTheRadius(Patched):
+    def test_the_place_and_the_radius_come_from_one_label(self):
+        self.assertEqual(fb.read_place(RadiusPage()), ("Provo, Utah", 100))
+
+    def test_a_place_with_a_comma_in_it_survives(self):
+        # 'Provo, Utah' has the same comma the radius clause is found by, so a
+        # greedy match would hand back 'Provo' and lose the state.
+        page = RadiusPage(place="Medford, Oregon", miles=500)
+        self.assertEqual(fb.read_place(page), ("Medford, Oregon", 500))
+
+    def test_a_label_that_is_not_there_is_not_an_error(self):
+        class Bare:
+            def query_selector(self, selector):
+                return None
+        self.assertEqual(fb.read_place(Bare()), ("", None))
+
+    def test_the_location_id_is_read_alongside_the_name(self):
+        page = RadiusPage()
+        self.assertEqual(fb.place_id_shown(page), "106066949424984")
+        self.assertEqual(fb.city_shown(page), "Provo, Utah")
+
+    def test_a_payload_with_no_id_still_gives_the_name(self):
+        # The id is optional in the pattern on purpose: losing it costs the
+        # restore, and must not cost the name the reports are written from.
+        class NoId:
+            def content(self):
+                return '"buy_location":{"display_name":"Provo, Utah"},...'
+        self.assertEqual(fb.city_shown(NoId()), "Provo, Utah")
+        self.assertEqual(fb.place_id_shown(NoId()), "")
+
+
+class TestSettingTheRadius(Patched):
+    def setUp(self):
+        self.patch(fb, "human_pause", lambda *a, **k: None)
+
+    def test_setting_it_reports_the_value_that_took(self):
+        page = RadiusPage(miles=100)
+        self.assertEqual(self.quietly(fb.set_radius_miles, page, 500), 500)
+        self.assertEqual(page.applied, 1)
+
+    def test_one_mile_is_asked_for_in_the_singular(self):
+        # The options are matched on their exact text, and Facebook writes the
+        # first one '1 mile'. Asking for '1 miles' would match nothing.
+        page = RadiusPage(miles=100)
+        self.quietly(fb.set_radius_miles, page, 1)
+        self.assertEqual(page.miles, 1)
+
+    def test_a_control_that_will_not_take_it_is_tried_twice_then_reported(self):
+        page = RadiusPage(miles=100, stubborn=True)
+        got = self.quietly(fb.set_radius_miles, page, 500)
+        self.assertEqual(got, 100)
+        self.assertEqual(page.applied, 2)
+        self.assertIn("trying once more", self.said)
+
+
+class TestPuttingTheAccountBack(Patched):
+    def setUp(self):
+        self.patch(fb, "human_pause", lambda *a, **k: None)
+        self.went = []
+        self.patch(fb, "goto_with_retry",
+                   lambda page, url: (self.went.append(url), True)[1])
+
+    def test_the_snapshot_reads_the_plain_feed(self):
+        snap = fb.snapshot_place(RadiusPage())
+        self.assertEqual(snap, {"place": "Provo, Utah",
+                                "id": "106066949424984", "miles": 100})
+        self.assertEqual(self.went, ["https://www.facebook.com/marketplace/"])
+
+    def test_a_snapshot_that_cannot_be_taken_is_not_an_error(self):
+        # It runs before the login has proved anything, and it is a courtesy.
+        # Whatever is really wrong will be raised by the step after it.
+        class Broken:
+            def query_selector(self, selector):
+                raise RuntimeError("navigation destroyed the page")
+        self.assertIsNone(fb.snapshot_place(Broken()))
+
+    def test_restoring_navigates_back_to_the_saved_id(self):
+        page = RadiusPage(miles=500)
+        self.quietly(fb.restore_place, page,
+                     {"place": "Provo, Utah", "id": "106066949424984",
+                      "miles": 100})
+        self.assertIn("https://www.facebook.com/marketplace/106066949424984/",
+                      self.went)
+        self.assertEqual(page.miles, 100)
+
+    def test_a_radius_already_back_where_it_was_is_left_alone(self):
+        page = RadiusPage(miles=100)
+        self.quietly(fb.restore_place, page,
+                     {"place": "Provo, Utah", "id": "1", "miles": 100})
+        self.assertEqual(page.applied, 0)
+
+    def test_nothing_to_restore_does_nothing(self):
+        self.quietly(fb.restore_place, RadiusPage(), None)
+        self.assertEqual(self.went, [])
+
+    def test_a_control_that_will_not_answer_ends_the_restore_quietly(self):
+        # The alternative is a finished run that raises on its way out, over a
+        # setting the sweep used to abandon anyway.
+        class Broken:
+            def query_selector(self, selector):
+                raise RuntimeError("gone")
+        self.quietly(fb.restore_place, Broken(), {"id": "1", "miles": 100})
+        self.assertIn("didn't respond as expected", self.said)
+
+    def test_a_navigation_that_raises_is_caught_by_the_restore_itself(self):
+        def explode(page, url):
+            raise RuntimeError("the network went away")
+        self.patch(fb, "goto_with_retry", explode)
+        self.quietly(fb.restore_place, RadiusPage(), {"id": "1", "miles": 100})
+        self.assertIn("couldn't put your Marketplace location back", self.said)
+
+    def test_even_a_closed_window_does_not_escape_the_restore(self):
+        class Closed:
+            def query_selector(self, selector):
+                raise browser.WindowClosed("The Facebook window was closed.")
+        self.quietly(fb.restore_place, Closed(), {"id": "1", "miles": 100})
+
+
+class TestRadius(SweepHarness):
+    """The radius as the sweep uses it: set from the search, put back at the
+    end, and written down as both what was asked for and what was granted."""
+
+    def setUp(self):
+        super().setUp()
+        self.set_to, self.restored = [], []
+        self.patch(fb, "snapshot_place",
+                   lambda page: {"place": "Provo, Utah", "id": "1", "miles": 100})
+        self.patch(fb, "restore_place",
+                   lambda page, snap: self.restored.append(snap))
+
+        def set_radius(page, miles, tries=2):
+            self.set_to.append(miles)
+            return self.granted if self.granted is not None else miles
+        self.granted = None
+        self.patch(fb, "set_radius_miles", set_radius)
+
+    def test_a_search_with_a_radius_sets_it_before_sweeping(self):
+        summary = self.sweep(radius_miles=500)
+        self.assertEqual(self.set_to, [500])
+        self.assertEqual(summary["radius_requested_miles"], 500)
+        self.assertEqual(summary["radius_miles"], 500)
+
+    def test_a_radius_already_set_is_not_set_again(self):
+        summary = self.sweep(radius_miles=100)
+        self.assertEqual(self.set_to, [])
+        self.assertEqual(summary["radius_miles"], 100)
+        self.assertIn("already set", self.said)
+
+    def test_a_search_with_no_radius_leaves_the_account_alone(self):
+        summary = self.sweep()
+        self.assertEqual(self.set_to, [])
+        self.assertIsNone(summary["radius_requested_miles"])
+        self.assertIsNone(summary["radius_miles"])
+
+    def test_a_radius_that_would_not_take_is_recorded_as_what_happened(self):
+        # The run still finishes and still writes its results. What it must not
+        # do is claim it searched 500 miles when it searched 100.
+        self.granted = 100
+        summary = self.sweep(radius_miles=500)
+        self.assertEqual(summary["radius_requested_miles"], 500)
+        self.assertEqual(summary["radius_miles"], 100)
+        self.assertIn("not the 500 mi asked for", self.said)
+
+    def test_both_numbers_reach_the_manifest(self):
+        self.granted = 100
+        summary = self.sweep(radius_miles=500)
+        manifest = self.manifest(summary)
+        self.assertEqual(manifest["search_radius_requested_miles"], 500)
+        self.assertEqual(manifest["search_radius_miles"], 100)
+        self.assertEqual(manifest["settings"]["radius_miles"], 500)
+
+    def test_a_finished_run_puts_the_account_back(self):
+        self.sweep(radius_miles=500)
+        self.assertEqual(self.restored, [{"place": "Provo, Utah", "id": "1",
+                                          "miles": 100}])
+
+    def test_an_interrupted_run_does_not(self):
+        # After a Ctrl-C every call into Playwright hangs, which is why the
+        # context isn't closed either. A courtesy is not worth a run that never
+        # returns.
+        self.raise_on = {2}
+        self.sweep(radius_miles=500)
+        self.assertEqual(self.restored, [])
 
 
 class _Nothing:

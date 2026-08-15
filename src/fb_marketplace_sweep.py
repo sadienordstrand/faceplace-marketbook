@@ -5,10 +5,10 @@ fb_marketplace_sweep.py
 Personal-use, low-frequency Facebook Marketplace tooling, and the entry point
 the launchers run.
 
-This module is the sweep itself — building a city's search URL, reading the
-account's search radius, scrolling a city and knowing when to stop — plus the
-pipeline in `run()` that drives every stage in one browser session, and the
-command line.
+This module is the sweep itself — building a city's search URL, setting the
+account's search radius and putting it back afterwards, scrolling a city and
+knowing when to stop — plus the pipeline in `run()` that drives every stage in
+one browser session, and the command line.
 
 The rest lives next door:
 
@@ -150,7 +150,11 @@ def city_was_dropped(page, seg):
     return f"/marketplace/{seg.lower()}/" not in path + "/"
 
 
-BUY_LOCATION_RE = re.compile(r'"buy_location":\{"display_name":"([^"]{2,60})"')
+# The id is optional in the pattern on purpose. city_shown() only wants the
+# name, and a Facebook that someday reorders the keys should cost us the id we
+# use for restoring the location, not the name we use for reporting.
+BUY_LOCATION_RE = re.compile(
+    r'"buy_location":\{"display_name":"([^"]{2,60})"(?:,"id":"(\d+)")?')
 
 
 def city_shown(page):
@@ -159,6 +163,21 @@ def city_shown(page):
     try:
         m = BUY_LOCATION_RE.search(page.content())
         return m.group(1) if m else ""
+    except Exception:
+        return ""
+
+
+def place_id_shown(page):
+    """The numeric id of the location Facebook is currently set to.
+
+    Worth having because it is already a valid city segment — parse_location()
+    accepts an id as readily as a name, and the shipped city list uses both — so
+    putting the account back where it was afterwards is a plain navigation to
+    /marketplace/<id>/ rather than typing into the dialog's autocomplete and
+    hoping the right suggestion comes first."""
+    try:
+        m = BUY_LOCATION_RE.search(page.content())
+        return (m.group(2) or "") if m else ""
     except Exception:
         return ""
 
@@ -193,6 +212,152 @@ def describe_radius(km, note=True):
     return f"~{miles} mi ({km} km){warn}"
 
 
+# The eleven values Facebook's radius picker offers, read off the live control.
+RADIUS_CHOICES_MILES = (1, 2, 5, 10, 20, 40, 60, 80, 100, 250, 500)
+
+# The left rail's location control. Its accessible name carries the place and
+# the radius together — 'Location: Provo, Utah, Within 100 mi' — which makes it
+# the one element worth knowing here.
+LOCATION_BUTTON = '[role="button"][aria-label^="Location:"]'
+LOCATION_LABEL_RE = re.compile(r"Location:\s*(.*?),\s*Within\s*([\d,]+)\s*mi",
+                               re.I)
+# The radius picker inside the dialog. Not a <select>: it's a custom ARIA
+# combobox whose generated ids change on every render and whose class names are
+# obfuscated, so role and accessible name are the only stable handles. The
+# aria-haspopup is what separates it from the location text field, which is the
+# dialog's other combobox.
+RADIUS_COMBO = '[role="dialog"] label[role="combobox"][aria-haspopup="listbox"]'
+APPLY_BUTTON = '[role="dialog"] [role="button"][aria-label="Apply"]'
+
+
+def read_place(page):
+    """(place, miles) from the location control, or ("", None).
+
+    Preferred over read_radius_km whenever the number will be compared against
+    one the user asked for. The radius is picked in miles and displayed in
+    miles, but filter_radius_km reports Facebook's rounded kilometres, and
+    converting those back is guesswork at the short end — 100, 250 and 500 are
+    the only conversions confirmed against the live page. This reads the miles
+    Facebook is showing. It also works on the plain /marketplace/ feed, which
+    carries no filter_radius_km at all."""
+    try:
+        el = page.query_selector(LOCATION_BUTTON)
+        label = (el.get_attribute("aria-label") or "") if el else ""
+    except Exception as e:
+        stop_if_window_closed(e)
+        return "", None
+    m = LOCATION_LABEL_RE.search(label)
+    if not m:
+        return "", None
+    return m.group(1).strip(), int(m.group(2).replace(",", ""))
+
+
+def dismiss_dialog(page):
+    """Leave no half-open dialog behind for the next attempt to trip over."""
+    try:
+        page.keyboard.press("Escape")
+        human_pause(0.8, 1.5)
+    except Exception:
+        pass
+
+
+def set_radius_miles(page, miles, tries=2):
+    """Set the account's Marketplace radius, and report what it actually became.
+
+    There is no URL parameter for this. Every plausible spelling — radius,
+    radius_km, radiusKm, filter_radius_km, distance, maxDistance, searchRadius,
+    proximity, latitude+longitude+radius, and the category path — was navigated
+    and judged against the page's own filter payload, and Facebook ignored all
+    of them. The dialog behind the location control is the only way in.
+
+    Every step is addressed by role and accessible name because nothing else
+    about the control is stable. The listbox is portalled to the body rather
+    than nested in the dialog, which is why the option lookup is page-wide.
+
+    Returns the radius in miles as Facebook reports it afterwards. That is not
+    always what was asked for, and the caller is expected to compare."""
+    want = f"{miles} mile" + ("" if miles == 1 else "s")
+    for attempt in range(tries):
+        try:
+            page.click(LOCATION_BUTTON, timeout=15000)
+            human_pause(1.5, 2.5)
+            page.click(RADIUS_COMBO, timeout=10000)
+            human_pause(1.0, 2.0)
+            page.get_by_role("option", name=want, exact=True).first.click(
+                timeout=10000)
+            human_pause(1.0, 2.0)
+            page.click(APPLY_BUTTON, timeout=10000)
+            # Applying reloads the results, and the control reports the old
+            # value until it lands.
+            human_pause(4.0, 6.0)
+        except Exception as e:
+            stop_if_window_closed(e)
+            print(f"  the radius control didn't respond as expected ({e})")
+            dismiss_dialog(page)
+        got = read_place(page)[1]
+        if got == miles:
+            return got
+        if attempt + 1 < tries:
+            print(f"  radius reads {got or 'unknown'} rather than {miles}; "
+                  f"trying once more")
+            human_pause(2.0, 4.0)
+    return read_place(page)[1]
+
+
+def snapshot_place(page):
+    """Where the account is pointed and how far it looks, before we touch it.
+
+    Has to run before the first city URL is opened: navigating to
+    /marketplace/<seg>/ is itself what moves the account, so once the sweep is
+    under way the original is already gone. The plain feed is the page that
+    still shows it.
+
+    Returns a dict, or None when the page didn't yield one — a snapshot that
+    couldn't be taken simply means nothing gets put back at the end.
+
+    Nothing in here is allowed to decide whether the run starts. It is a
+    courtesy taken before the work begins, and if the browser is in a state bad
+    enough to break it, the login and preflight steps immediately after will say
+    so in the terms the run already knows how to handle."""
+    try:
+        if not goto_with_retry(page, "https://www.facebook.com/marketplace/"):
+            return None
+        human_pause(3.0, 5.0)
+        place, miles = read_place(page)
+        snap = {"place": place, "id": place_id_shown(page), "miles": miles}
+        return snap if (snap["id"] or snap["miles"]) else None
+    except (Exception, KeyboardInterrupt):
+        return None
+
+
+def restore_place(page, snap):
+    """Put the account back where the run found it. Never fatal, ever.
+
+    A courtesy rather than part of the result. The sweep has always walked off
+    with the location left on the last city it swept, and a per-search radius
+    would add a second setting lying around afterwards. Failing to put either
+    one back is precisely the old behaviour, so nothing here may raise, may
+    reach the emailed report, or may hold a finished run up for long. That is
+    also why it swallows KeyboardInterrupt: this runs from a finally, and the
+    usual reason to be there is that the run was already interrupted."""
+    if not snap:
+        return
+    try:
+        if snap.get("id"):
+            goto_with_retry(
+                page, f"https://www.facebook.com/marketplace/{snap['id']}/")
+            human_pause(2.0, 4.0)
+        if snap.get("miles") and read_place(page)[1] != snap["miles"]:
+            set_radius_miles(page, snap["miles"], tries=1)
+        place, miles = read_place(page)
+        if place or miles:
+            print(f"  put Marketplace back to {place or 'where it was'}"
+                  + (f", {miles} mi" if miles else ""))
+    except (Exception, KeyboardInterrupt) as e:
+        print(f"  couldn't put your Marketplace location back ({e}); it's left "
+              f"on whatever this run used.")
+
+
 def show_gallery(path):
     """The finished gallery, in the everyday browser. It's self-contained — the
     photos are baked in — so the file URL is all the browser needs."""
@@ -219,58 +384,23 @@ def discard_empty_run_dir(run_dir):
         pass
 
 
-def preflight_pause(page, url, skip=False):
-    """Hand the browser to the user before the sweep starts, and report the
-    radius while they're looking at it.
+def preflight(page, url):
+    """Open the first search page and read the radius off it for the record.
 
-    The radius is an account-level setting with a 250-mile default, and a run
-    started on that default silently searches a quarter of the area the city
-    spacing assumes — the listings it misses never show up as an error. Since
-    the login step already requires a human at the keyboard, this is the one
-    moment where showing them the number costs nothing.
+    This used to stop and wait on Enter so the popups could be dismissed and the
+    radius set by hand. Neither is worth a run that sits there until someone
+    notices: the popups don't affect the sweep, and the radius is the search's
+    to set now — offering to change it mid-run only invites a sweep at a
+    distance nobody asked for.
 
-    Returns the radius in km as of the moment they continued, or None."""
+    Returns the radius in km, or None. That is Facebook's rounded metric copy,
+    kept for the run record; anything compared against a radius the user asked
+    for reads miles from read_place instead."""
     goto_with_retry(page, url)
     human_pause(3.0, 5.0)
     km = read_radius_km(page)
-    if skip:
-        print(f"  search radius: {describe_radius(km) or 'unknown'}")
-        return km
-
-    print("\n" + "=" * 66)
-    print("The browser is ready. Before the sweep starts, in that window:")
-    print("\n  1. Close any Facebook popups (notifications, cookie banners).")
-    if km and km < EXPECTED_RADIUS_KM:
-        print(f"  2. Check the search radius. It's set to "
-              f"{describe_radius(km, note=False)}. ")
-        print("     Facebook allows up to 500 miles; raise it in")
-        print("     the location control in the left sidebar for a wider net.")
-    elif km:
-        print(f"  2. Check the search radius. It reads "
-              f"{describe_radius(km, note=False)},")
-        print("     the widest Facebook allows.")
-    else:
-        print("  2. Check the search radius in the left sidebar. Facebook")
-        print("     starts you on 250 miles and allows up to 500.")
-    print("     The radius is an account setting, so you only set it once.")
-    print("\n  3. Come back here and press Enter.")
-    print("=" * 66)
-    try:
-        input("\nPress Enter to start the sweep (Ctrl-C to quit)... ")
-    except EOFError:
-        print("(no terminal to wait on — starting)")
-        return km
-    # Closing the browser is the other way to answer this prompt, and there's no
-    # sweep to start without it. Nothing has been gathered yet either, so this is
-    # the one stage where stopping is simply quitting.
-    if page.is_closed():
-        raise WindowClosed("The Facebook window was closed before the sweep "
-                           "started.")
-
-    after = read_radius_km(page)
-    if after and after != km:
-        print(f"Radius is now {describe_radius(after, note=False)}.")
-    return after or km
+    print(f"  search radius: {describe_radius(km) or 'unknown'}")
+    return km
 
 
 def collect_city(page, max_scrolls, is_keeper=None, patience=4,
@@ -427,8 +557,8 @@ def run(query, scrolls, exact, out_csv=None, only=None, keep_all=False,
         debug_dump=False, match=None, limit=None, thumbs_dir=THUMBS_DIRNAME,
         do_descriptions=True, do_thumbs=True, do_gallery=True, pace=DEFAULT_PACE,
         exclude=(), min_price=None, max_price=None, min_year=None, max_year=None,
-        include_no_year=True,
-        only_labels=None, open_gallery=True, no_pause=False,
+        include_no_year=True, radius_miles=None,
+        only_labels=None, open_gallery=True,
         run_dir=None, previous_rows=None, describe_new_only=False, verifier=None,
         login_wait=None, unattended=False):
     """One pass over everything: sweep every saved city, visit each kept
@@ -514,6 +644,9 @@ def run(query, scrolls, exact, out_csv=None, only=None, keep_all=False,
               + ("" if include_no_year else ", excluding listings with no year"))
     all_rows, dropped_total = {}, 0
     city_stats, drop_reasons, radius_km = {}, {}, None
+    # What the account looked like before this run touched it, and the radius
+    # actually in force once it had. The second is not always the one asked for.
+    place_snapshot, radius_actual = None, None
     unknown_cities = []
     prev_by_id = {r["item_id"]: dict(r) for r in (previous_rows or [])
                   if r.get("item_id")}
@@ -542,11 +675,29 @@ def run(query, scrolls, exact, out_csv=None, only=None, keep_all=False,
         try:
             ensure_logged_in(page, timeout_s=login_wait or 600,
                              unattended=unattended)
+            # Before anything else: opening a city URL is itself what moves the
+            # account, so this is the last moment the original is readable.
+            place_snapshot = snapshot_place(page)
+            if radius_miles:
+                was = (place_snapshot or {}).get("miles")
+                if was == radius_miles:
+                    radius_actual = radius_miles
+                    print(f"Search radius: {radius_miles} mi (already set)")
+                else:
+                    print(f"Setting the search radius to {radius_miles} mi"
+                          + (f", from {was} mi" if was else "") + "...")
+                    radius_actual = set_radius_miles(page, radius_miles)
+                    if radius_actual == radius_miles:
+                        print(f"  radius is now {radius_actual} mi")
+                    else:
+                        print(f"  !! radius reads "
+                              f"{f'{radius_actual} mi' if radius_actual else 'unknown'}"
+                              f", not the {radius_miles} mi asked for. The sweep "
+                              f"will cover that distance instead.")
             first_seg = next(iter(locs.values()))
-            radius_km = preflight_pause(
+            radius_km = preflight(
                 page, build_search_url(first_seg, queries[0], exact, min_price,
-                                       max_price),
-                skip=no_pause)
+                                       max_price))
         except KeyboardInterrupt as e:
             # Nothing has been searched yet, so there is nothing to salvage and
             # nothing to leave behind either.
@@ -813,6 +964,11 @@ def run(query, scrolls, exact, out_csv=None, only=None, keep_all=False,
         # the block below stops the driver, and that takes the browser with it,
         # which is all closing would have achieved.
         if not interrupted:
+            # Restoring is gated on the same condition, and for the same
+            # reason: after a Ctrl-C every call into the driver hangs, and a
+            # courtesy is not worth a run that never returns. An interrupted run
+            # leaves the account where it got to, which is what it always did.
+            restore_place(page, place_snapshot)
             try:
                 ctx.close()
             except Exception:
@@ -866,11 +1022,15 @@ def run(query, scrolls, exact, out_csv=None, only=None, keep_all=False,
                 "min_year": min_year, "max_year": max_year,
                 "include_no_year": include_no_year,
                 "exclude": list(exclude), "keep_all": keep_all,
-                "match": match, "limit": limit,
+                "match": match, "limit": limit, "radius_miles": radius_miles,
                 "stages": stages,
             },
             "search_radius_km": radius_km,
             "search_radius_note": describe_radius(radius_km),
+            # Both, because they can differ: the first is what this search asked
+            # for, the second is what Facebook was actually set to while it ran.
+            "search_radius_requested_miles": radius_miles,
+            "search_radius_miles": radius_actual,
             "locations": locs,
             "per_city": city_stats,
             "unknown_cities": unknown_cities,
@@ -939,6 +1099,8 @@ def run(query, scrolls, exact, out_csv=None, only=None, keep_all=False,
         "interrupted": interrupted,
         "interrupted_during": stopped_during,
         "radius_km": radius_km,
+        "radius_requested_miles": radius_miles,
+        "radius_miles": radius_actual,
         "per_city": city_stats,
         "locations": locs,
         "unknown_cities": unknown_cities,
@@ -1021,11 +1183,12 @@ def login_only():
           "ones — will use it until Facebook expires it, usually a few weeks.")
 
 
-def set_radius():
-    """The Marketplace search radius is an account setting, not a URL parameter,
-    so this opens the UI and waits for you to change it — then confirms the new
-    value from the page's own filter payload. Normally you want this pinned at
-    the 500-mile maximum, which is what the saved city spacing is built around."""
+def set_radius(miles=None):
+    """Set the account's Marketplace radius from the command line.
+
+    Each search now carries its own radius and sets it when it runs, so this is
+    for setting the account's resting value by hand — with `miles`, or without
+    it by waiting while you work the control yourself."""
     seg = next(iter(locations.load_locations().values()))
     with sync_playwright() as p:
         ctx = launch_context(p, notice=False)
@@ -1033,24 +1196,33 @@ def set_radius():
         ensure_logged_in(page)
         page.goto(build_search_url(seg, "test", False), wait_until="domcontentloaded")
         human_pause(3.0, 5.0)
-        before = read_radius_km(page)
-        print(f"\nCurrent radius: {describe_radius(before) or 'unknown'}")
-        if before == EXPECTED_RADIUS_KM:
-            print("That's the 500-mile maximum — the widest Facebook will "
-                  "search around each city. No change needed unless you want "
-                  "it smaller.")
-        print(">> In the browser window, open the location/radius control in the "
-              "left sidebar and set the radius. This is an account setting, so "
-              "it sticks for every future run. Waiting up to 5 minutes...")
-        deadline = time.time() + 300
-        while time.time() < deadline:
-            time.sleep(5)
-            now = read_radius_km(page)
-            if now and now != before:
-                print(f">> Radius is now {describe_radius(now)}. Done.")
-                break
+        before = read_place(page)[1]
+        print(f"\nCurrent radius: "
+              f"{f'{before} mi' if before else 'unknown'}")
+        if miles:
+            if miles == before:
+                print(f"Already {miles} mi. Nothing to do.")
+            else:
+                got = set_radius_miles(page, miles)
+                print(f">> Radius is now {got} mi." if got == miles else
+                      f">> Radius reads {got or 'unknown'}, not the {miles} "
+                      f"asked for. Try again, or set it in the window yourself.")
         else:
-            print(">> Radius unchanged. You can re-run --set-radius any time.")
+            if before == max(RADIUS_CHOICES_MILES):
+                print("That's the 500-mile maximum — the widest Facebook will "
+                      "search around each city.")
+            print(">> In the browser window, open the location control in the "
+                  "left sidebar and set the radius. Waiting up to 5 minutes... "
+                  "(or re-run with --set-radius MILES to skip the waiting)")
+            deadline = time.time() + 300
+            while time.time() < deadline:
+                time.sleep(5)
+                now = read_place(page)[1]
+                if now and now != before:
+                    print(f">> Radius is now {now} mi. Done.")
+                    break
+            else:
+                print(">> Radius unchanged. You can re-run --set-radius any time.")
         ctx.close()
 
 
@@ -1182,10 +1354,11 @@ def run_from_ui(a):
                     min_price=cfg["min_price"], max_price=cfg["max_price"],
                     min_year=cfg["min_year"], max_year=cfg["max_year"],
                     include_no_year=cfg["include_no_year"],
+                    radius_miles=cfg.get("radius_miles"),
                     only_labels=cfg["cities"],
                     # Held back until the window is up again, so the gallery
                     # lands in front of it rather than behind it.
-                    open_gallery=False, no_pause=a.no_pause)
+                    open_gallery=False)
         except scheduling.AlreadyRunning as e:
             print(f"\nNot starting: {e}.\n{why_wait(e)}")
             continue
@@ -1228,12 +1401,16 @@ def main():
     ap.add_argument("--exclude-no-year", action="store_true",
                     help="with a year bound set, also drop listings whose title "
                          "has no year in it at all")
-    ap.add_argument("--no-pause", action="store_true",
-                    help="skip the pause after login for popups and the radius")
+    ap.add_argument("--radius", type=int, metavar="MILES",
+                    choices=RADIUS_CHOICES_MILES,
+                    help="set the Marketplace search radius for this run "
+                         "(one of %(choices)s); left alone if omitted")
     ap.add_argument("--no-open", action="store_true",
                     help="don't open the finished gallery in a browser")
-    ap.add_argument("--set-radius", action="store_true",
-                    help="open Marketplace so you can check/change the account search radius")
+    ap.add_argument("--set-radius", nargs="?", type=int, const=0,
+                    metavar="MILES", default=None,
+                    help="set the account search radius to MILES, or with no "
+                         "number, open Marketplace so you can change it yourself")
     ap.add_argument("--login", action="store_true",
                     help="log into Facebook and save the session, without running a search")
     ap.add_argument("--desktop-icon", action="store_true",
@@ -1287,6 +1464,10 @@ def main():
         ap.error("--min-year is later than --max-year")
     if len(query_list(a.query)) > MAX_QUERIES:
         ap.error(f"--query can be given at most {MAX_QUERIES} times")
+    # 0 is the const for a bare --set-radius, so it isn't a value to check.
+    if a.set_radius not in (None, 0) and a.set_radius not in RADIUS_CHOICES_MILES:
+        ap.error("--set-radius has to be one of "
+                 + ", ".join(str(m) for m in RADIUS_CHOICES_MILES))
     # One line, and only when there's something to say. The settings window
     # makes the same offer with a button beside it; this is for the runs that
     # never open one. Both read the same answer, which is fetched once per
@@ -1301,8 +1482,10 @@ def main():
         make_desktop_icon.main([])
     elif a.login:
         login_only()
-    elif a.set_radius:
-        set_radius()
+    elif a.set_radius is not None:
+        # 0 is the const for a bare --set-radius, which means "wait while I do
+        # it", not "a radius of zero".
+        set_radius(a.set_radius or None)
     elif a.descriptions:
         descriptions_from_csv(a.descriptions, a.match, a.limit, a.debug_dump,
                               None if a.no_thumbs else a.thumbs_dir, a.pace)
@@ -1326,7 +1509,8 @@ def main():
                     min_price=a.min_price, max_price=a.max_price,
                     min_year=a.min_year, max_year=a.max_year,
                     include_no_year=not a.exclude_no_year,
-                    open_gallery=not a.no_open, no_pause=a.no_pause)
+                    radius_miles=a.radius,
+                    open_gallery=not a.no_open)
         except scheduling.AlreadyRunning as e:
             raise SystemExit(f"Not starting: {e}.\n{why_wait(e)}")
 

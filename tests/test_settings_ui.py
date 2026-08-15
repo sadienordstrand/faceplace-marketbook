@@ -109,13 +109,18 @@ class UITest(unittest.TestCase):
             setattr(sc, k, v)
 
     def drive(self, script, defaults=None, cities=None, builtins=(),
-              extra_hooks=None, email=True, schedule=True):
+              extra_hooks=None, email=True, schedule=True, radius="500"):
         """Opens the window, runs `script(page)`, returns what was submitted.
 
         `email` writes a working email account before the window opens and
         `schedule` has automatic runs on and unblocked, because a scheduled search
         can't be made without both — the tests that are about those refusals are
-        the ones that turn them off."""
+        the ones that turn them off.
+
+        `radius` is picked before the script runs for the same reason: it is
+        required and has no default, so every test about something else would
+        otherwise be a test about the radius. The ones that are about it pass
+        radius=None and choose for themselves."""
         result = {}
         cities = list(cities or CITIES)
         if email:
@@ -128,6 +133,8 @@ class UITest(unittest.TestCase):
                     and self.errors.append(m.text))
             page.on("pageerror", lambda e: self.errors.append(str(e)))
             try:
+                if radius:
+                    page.select_option("#radius_miles", radius)
                 script(page)
             finally:
                 if not page.is_closed():
@@ -832,6 +839,60 @@ class UITest(unittest.TestCase):
             self.assertNotIn("select at least one city",
                              page.text_content("#est"))
             self.assertFalse(page.is_disabled("#start"))
+        self.drive(script)
+
+    # ------------------------------------------------------ the search radius
+    def test_no_radius_is_chosen_to_begin_with(self):
+        # Deliberately blank. The run sets whatever is here in Facebook, so a
+        # preselected value would be a distance nobody actually asked for.
+        def script(page):
+            self.assertEqual(page.input_value("#radius_miles"), "")
+        self.drive(script, radius=None)
+
+    def test_a_search_cannot_start_without_a_radius(self):
+        def script(page):
+            page.fill("#query", "defender 110")
+            self.assertTrue(page.is_disabled("#start"))
+            self.assertIn("search radius required", page.text_content("#est"))
+            page.select_option("#radius_miles", "20")
+            self.assertNotIn("search radius required", page.text_content("#est"))
+            self.assertFalse(page.is_disabled("#start"))
+        self.drive(script, radius=None)
+
+    def test_the_chosen_radius_is_what_gets_submitted(self):
+        def script(page):
+            page.fill("#query", "defender 110")
+            page.select_option("#radius_miles", "20")
+            page.click("#start")
+            page.wait_for_timeout(300)
+        self.assertEqual(self.drive(script, radius=None)["radius_miles"], 20)
+
+    def test_the_radius_reads_back_in_the_footer(self):
+        def script(page):
+            page.fill("#query", "defender 110")
+            page.select_option("#radius_miles", "250")
+            self.assertIn("250 mile radius", page.text_content("#est"))
+        self.drive(script, radius=None)
+
+    def test_the_radius_card_sits_directly_under_the_cities(self):
+        # It belongs to where the search looks, not to what it keeps, and the
+        # order is how anyone reading the form down the page understands it.
+        def script(page):
+            headings = page.eval_on_selector_all(
+                "#paneNew section h2", "els => els.map(e => e.textContent)")
+            self.assertEqual(headings[headings.index("Cities") + 1],
+                             "Search radius")
+        self.drive(script)
+
+    def test_a_saved_search_keeps_its_radius_and_brings_it_back_to_the_form(self):
+        def script(page):
+            page.select_option("#radius_miles", "40")
+            self.fill_and_save(page)
+            self.assertEqual(self.saved()[0]["radius_miles"], 40)
+            page.click("#tabSaved")
+            page.click(".card button[data-act=edit]")
+            page.wait_for_selector("#cancelEdit:not([hidden])")
+            self.assertEqual(page.input_value("#radius_miles"), "40")
         self.drive(script)
 
     def test_the_email_tab_saves_settings(self):

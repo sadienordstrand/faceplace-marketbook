@@ -212,6 +212,7 @@ function collect() {
     min_year: num('min_year'),
     max_year: num('max_year'),
     include_no_year: on('include_no_year'),
+    radius_miles: num('radius_miles'),
     exclude: $('exclude').value.trim(),
     do_descriptions: on('do_descriptions'),
     do_thumbs: on('do_thumbs'),
@@ -266,6 +267,7 @@ function summary(c) {
     bits.push(c.queries.map(q => `“${escHtml(q)}”`).join(' or '));
   if (c.exact) bits.push('exact matching');
   bits.push(count(c.cities.length, 'city', 'cities'));
+  if (c.radius_miles != null) bits.push(`<b>${c.radius_miles} mile</b> radius`);
   const price = rangeText(c.min_price, c.max_price, n => '$' + n.toLocaleString(),
                           s => `${s} and up`, s => `up to ${s}`);
   const years = rangeText(c.min_year, c.max_year, String,
@@ -306,6 +308,10 @@ function refresh() {
   const warns = [];
   if (!c.queries.length) warns.push('query required');
   if (!c.cities.length) warns.push('select at least one city');
+  // No default is offered, so this is always a deliberate choice. The run sets
+  // it in Facebook, and a search that never said how far to look would inherit
+  // whatever the last one used.
+  if (c.radius_miles == null) warns.push('search radius required');
   if (problems.length) warns.push('fix quality filters');
   $('est').innerHTML = summary(c)
     .concat(warns.map(w => `<span class="warn">${w}</span>`))
@@ -318,6 +324,7 @@ function refresh() {
 $('query').addEventListener('input', refresh);
 ['min_price', 'max_price', 'min_year', 'max_year', 'exclude', 'limit']
   .forEach(id => $(id).addEventListener('input', refresh));
+$('radius_miles').addEventListener('change', refresh);
 
 // A link here goes to the everyday browser, never to this window: this one is
 // Playwright's, so it has no address bar to get back from, isn't logged into
@@ -514,6 +521,7 @@ function startEditing(s) {
   $('max_year').value = s.max_year == null ? '' : s.max_year;
   $('include_no_year').setAttribute('aria-pressed',
     s.include_no_year === false ? 'false' : 'true');
+  $('radius_miles').value = s.radius_miles == null ? '' : s.radius_miles;
   $('limit').value = s.limit == null ? '' : s.limit;
   $('exact').setAttribute('aria-pressed', s.exact ? 'true' : 'false');
   $('do_descriptions').setAttribute('aria-pressed',

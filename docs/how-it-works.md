@@ -133,9 +133,10 @@ cloned](#updating-a-copy-that-was-never-cloned).
 | `--exact` | Ask Facebook for tight matching (default is loose). |
 | `--keep-all` | Keep non-matching listings, flagged in `source_section` / `matches_query`. |
 | `--no-descriptions` / `--no-thumbs` / `--no-gallery` | Skip that stage. `--thumbnails-dir DIR` moves the thumbnail folder. |
-| `--no-pause` / `--no-open` | Skip the post-login pause, or don't open the gallery. |
+| `--no-open` | Don't open the finished gallery in a browser. |
 | `--login` | Refresh the saved Facebook session and exit. |
-| `--set-radius` | Open Marketplace to check or restore the account search radius. |
+| `--radius MILES` | Set the Marketplace search radius for this run. One of 1, 2, 5, 10, 20, 40, 60, 80, 100, 250, 500. Omitted, the account's radius is left alone. |
+| `--set-radius [MILES]` | Set the account search radius to `MILES`, or with no number, open Marketplace and wait while you change it yourself. |
 | `--desktop-icon` | Put a double-clickable icon on the desktop and exit. |
 | `--debug-dump` | Save raw Facebook JSON payloads for troubleshooting extraction. |
 | `--descriptions CSV` / `--download-thumbs CSV` | One-off passes over an existing CSV instead of a sweep. |
@@ -335,14 +336,63 @@ rather than as one odd-looking string.
 
 ## Search radius
 
-The radius is an **account-level Marketplace setting**, not a URL parameter —
-none of the obvious URL spellings affect it. It defaults to 250 miles, and the
-saved cities are spaced assuming 500, so a fresh account quietly searches about a
-quarter of the intended area, with no error to show for it. So
-`preflight_pause()` runs between login and the first city: it reads the radius
-out of the page's own `filter_radius_km` payload, prints it, and blocks on
-`input()` while you fix it, then re-reads it so `run.json` records the value
-actually used.
+The radius is an **account-level Marketplace setting, and there is no URL
+parameter for it.** Sixteen spellings were navigated and judged against the
+page's own filter payload — `radius`, `radius_km`, `radiusKm`, `radius_in_km`,
+`radiusInKm`, `radius_miles`, `radiusMiles`, `filter_radius_km`, `distance`,
+`maxDistance`, `max_distance`, `searchRadius`, `search_radius`, `proximity`,
+`latitude`+`longitude`+`radius`, and the same on the category path. Facebook
+ignored every one: `filter_radius_km` read the same before, during and after.
+Worth re-testing before anyone tries to simplify this, and worth not re-testing
+casually, since it costs sixteen navigations on a real account.
+
+So each search carries a `radius_miles` and sets it by **working Facebook's own
+location control**, in `set_radius_miles()`. What that control is made of decides
+how the code is written:
+
+* The left-rail button is `div[role=button]` with an accessible name reading
+  `Location: Provo, Utah, Within 100 mi`. Place and radius in one attribute, and
+  present on the plain `/marketplace/` feed as well as on a search page.
+* The radius picker inside the dialog is **not a `<select>`**. It is a custom
+  ARIA combobox — `label[role=combobox][aria-haspopup=listbox]` — whose ids are
+  generated per render (`_r_10_`, `_r_11_`) and whose classes are obfuscated. Its
+  `aria-haspopup` is what tells it apart from the dialog's other combobox, the
+  location text field. Role and accessible name are the only stable handles, so
+  they are all the code uses.
+* The listbox it opens is **portalled to the body**, not nested in the dialog,
+  which is why the option lookup is page-wide. It offers exactly eleven values:
+  1, 2, 5, 10, 20, 40, 60, 80, 100, 250 and 500 miles. `RADIUS_CHOICES_MILES` is
+  that list, and it is what the settings window offers and what
+  `validate_bounds()` enforces, so nobody can ask for 137 miles and quietly get
+  something else.
+
+**Miles, not kilometres, wherever the number is compared.** `read_place()` reads
+the miles Facebook is showing; `read_radius_km()` reads `filter_radius_km`, which
+is Facebook's rounded metric copy. Converting the latter back is guesswork at the
+short end — only 100→161, 250→402 and 500→805 are confirmed — and the plain
+`/marketplace/` feed carries no `filter_radius_km` at all.
+
+**Every set is verified, and a failed one is loud.** `set_radius_miles()` applies,
+re-reads, retries once, and returns what actually took. `run()` records the
+request and the result separately (`radius_requested_miles` and `radius_miles`),
+and `run_saved_search()` turns a mismatch into a report warning. This is the one
+failure the feature can produce that looks exactly like success: the run
+finishes, the email arrives, and the listings are from the wrong distance.
+Nothing but that warning would say so.
+
+**The account is put back afterwards.** `snapshot_place()` reads the location and
+radius off `/marketplace/` before the first city URL is opened — that navigation
+is itself what moves the account, so it is the last moment the original is
+readable — and `restore_place()` navigates back to `buy_location`'s **id**, which
+`parse_location()` already accepts as a city segment, so no typing into the
+autocomplete is needed. Both are courtesies and neither may raise: a snapshot
+that fails must not change whether the run starts, and a restore that fails
+leaves the account where the run put it, which is what the sweep always did.
+
+Restoring is skipped after a Ctrl-C, for the same reason `ctx.close()` is: the
+interrupt comes out of a Playwright call and leaves the sync API wedged, so any
+call into it afterwards hangs rather than fails. A courtesy is not worth a run
+that never returns.
 
 ## How deep it scrolls
 
@@ -503,11 +553,11 @@ confirm anything sold — and the run winds up through the same CSV → gallery 
 of a scheduled search's report.
 
 Two things are deliberately not salvaged. A Ctrl-C before the first city — at
-the login screen or the preflight pause — exits instead, because there is
-nothing to save; it also takes the run folder back with it, since the folder is
-made before the browser opens and Past searches lists folders. And a stop that
-finds nothing at all writes nothing at all, rather than leaving an empty run
-behind.
+the login screen, or while the radius is being set — exits instead, because
+there is nothing to save; it also takes the run folder back with it, since the
+folder is made before the browser opens and Past searches lists folders. And a
+stop that finds nothing at all writes nothing at all, rather than leaving an
+empty run behind.
 
 ### Closing the browser window
 
@@ -521,10 +571,9 @@ right to be forgiving about one page — but once the window is gone, every page
 left fails the same way, and thousands of silent failures in a row is the one
 response worse than stopping.
 
-Two places poll instead, having no failing call to notice. The login wait, whose
+One place polls instead, having no failing call to notice: the login wait, whose
 `is_logged_in()` answers False for a window that isn't there and would otherwise
-sit out its full ten minutes; and the preflight pause, which is blocked on
-`input()` and checks `page.is_closed()` once that's answered.
+sit out its full ten minutes.
 
 What this replaces was worse than a lost run. The error came out of whichever
 Playwright call was in flight and ended the process without unwinding, which left
