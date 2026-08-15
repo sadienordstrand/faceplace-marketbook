@@ -436,8 +436,15 @@ vehicle sellers put it and no listing field carries it. The first `19xx`/`20xx`
 match bounded to 1900..next year wins, which keeps trim and spec numbers ("2500
 lb winch") from reading as years, and listings with no year sort to the bottom in
 *both* directions, since "no year" is missing data rather than an extreme value.
-**Hiding** a card with its `✕` is remembered by listing id in local storage, so
-it survives sorting, reloads, and even rebuilding the file from a later sweep.
+**Hiding** a card with the cross in its top right corner is remembered by listing
+id in local storage, so it survives sorting, reloads, and even rebuilding the
+file from a later sweep. **Starring** one with the star in the opposite corner
+works the same way, under its own key, and pins the card to the front of whatever
+order the sort produced — a stable sort on starredness, so the chosen order still
+holds within each group. The two are opposite verdicts, so starring a card
+unhides it and hiding one unstars it. Both marks are inline SVG rather than the
+`★`/`✕` characters, which aren't in either of the page's typefaces and so would
+arrive from an OS fallback font at about half the size asked for.
 
 ### Getting back to one
 

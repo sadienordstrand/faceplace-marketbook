@@ -133,18 +133,39 @@ __TOKENS__
     filter: sepia(.2) saturate(.85) brightness(.88); transition: filter .2s ease;
   }
   .card:hover .imgwrap img { filter: none; }
-  .hide-btn {
-    position: absolute; top: 8px; right: 8px; z-index: 2;
-    min-width: 27px; height: 27px; padding: 0 6px; cursor: pointer;
-    background: rgba(16, 18, 11, .78); color: var(--ink);
+  /* The star and the cross are the only controls in here, one to each top
+     corner. They're drawn rather than typed: the ★ and ✕ characters aren't in
+     this page's typefaces, so they arrive from whatever symbol font the OS
+     falls back to, at roughly half the height they're asked for. */
+  .imgwrap button {
+    position: absolute; top: 7px; z-index: 2;
+    width: 30px; height: 30px; padding: 0; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(16, 18, 11, .72); color: var(--ink);
     border: 1px solid var(--rule); border-radius: 2px;
     font: 11px var(--type); line-height: 1; letter-spacing: .1em;
-    opacity: 0; transition: opacity .14s ease, background .14s ease;
+    opacity: 0;
+    transition: opacity .14s ease, background .14s ease, border-color .14s ease,
+                color .14s ease;
   }
-  .card:hover .hide-btn, .hide-btn:focus-visible { opacity: 1; }
-  .hide-btn:hover {
-    background: var(--accent); color: #241608; border-color: var(--accent);
+  .imgwrap button svg {
+    display: block; width: 18px; height: 18px;
+    fill: none; stroke: currentColor; stroke-width: 2;
+    stroke-linecap: round; stroke-linejoin: round;
   }
+  .card:hover .imgwrap button, .imgwrap button:focus-visible { opacity: 1; }
+  .imgwrap button:hover { background: var(--accent); border-color: var(--accent); }
+  .hide-btn { right: 7px; }
+  /* The UNHIDE wording needs the width the square doesn't have. */
+  .hide-btn.wide { width: auto; padding: 0 7px; }
+  .star-btn { left: 7px; }
+  /* A set star keeps the orange of the click it came from, and drops its border
+     so the filled star is the only thing the eye has to read. Hovering fills it
+     too, which is the button showing what it's about to do. */
+  .card.is-starred .star-btn {
+    opacity: 1; background: var(--accent); border-color: transparent;
+  }
+  .star-btn:hover svg, .card.is-starred .star-btn svg { fill: currentColor; }
   .card.is-hidden { opacity: .45; }
   .card.is-hidden .hide-btn { opacity: 1; }
 
@@ -369,29 +390,49 @@ __TOKENS__
                     {className:'noimg',textContent:'image expired'}))">`
     : `<div class="noimg">no image</div>`;
 
-  // Hidden listings are remembered by item_id, so the state survives filtering,
-  // sorting, reloads, and even a rebuild of this file from a fresh sweep.
+  const STAR_ICON = `<svg viewBox="0 0 24 24" aria-hidden="true"><polygon
+    points="12 2.4 15.1 8.7 22 9.7 17 14.6 18.2 21.5 12 18.2 5.8 21.5 7 14.6
+            2 9.7 8.9 8.7"/></svg>`;
+  const CROSS_ICON = `<svg viewBox="0 0 24 24" aria-hidden="true"
+    ><line x1="4.5" y1="4.5" x2="19.5" y2="19.5"/><line
+      x1="19.5" y1="4.5" x2="4.5" y2="19.5"/></svg>`;
+
+  // Hidden and starred listings are remembered by item_id, so the state survives
+  // filtering, sorting, reloads, and even a rebuild of this file from a fresh sweep.
   const HIDE_KEY = 'faceplace-marketbook-hidden';
-  let hidden = new Set();
-  try {
-    hidden = new Set(JSON.parse(localStorage.getItem(HIDE_KEY) || '[]'));
-  } catch (e) { /* file:// with storage disabled — keep it in memory only */ }
-  const saveHidden = () => {
+  const STAR_KEY = 'faceplace-marketbook-starred';
+  const loadIds = key => {
     try {
-      localStorage.setItem(HIDE_KEY, JSON.stringify([...hidden]));
+      return new Set(JSON.parse(localStorage.getItem(key) || '[]'));
+    } catch (e) {
+      return new Set();  // file:// with storage disabled — keep it in memory only
+    }
+  };
+  const saveIds = (key, ids) => {
+    try {
+      localStorage.setItem(key, JSON.stringify([...ids]));
     } catch (e) { /* no-op */ }
   };
+  const hidden = loadIds(HIDE_KEY);
+  const starred = loadIds(STAR_KEY);
   let showHidden = false;
 
   function card(r) {
     const isHidden = hidden.has(r.item_id);
+    const isStarred = starred.has(r.item_id);
     const meta = [r.listing_location, r.miles].filter(Boolean).join(' · ');
-    return `<div class="card${isHidden ? ' is-hidden' : ''}" data-i="${r._i}" tabindex="0">
+    return `<div class="card${isStarred ? ' is-starred' : ''}${isHidden ? ' is-hidden' : ''}"
+                 data-i="${r._i}" tabindex="0">
       <div class="imgwrap">${imgTag(r, true)}
-        <button type="button" class="hide-btn"
+        <button type="button" class="star-btn" aria-pressed="${isStarred}"
+                aria-label="${isStarred ? 'Unstar' : 'Star'} this listing"
+                title="${isStarred ? 'Unstar this listing'
+                                  : 'Star this listing to keep it at the top'}"
+        >${STAR_ICON}</button>
+        <button type="button" class="hide-btn${isHidden ? ' wide' : ''}"
                 aria-label="${isHidden ? 'Unhide' : 'Hide'} this listing"
                 title="${isHidden ? 'Unhide' : 'Hide'} this listing"
-        >${isHidden ? 'UNHIDE' : '✕'}</button>
+        >${isHidden ? 'UNHIDE' : CROSS_ICON}</button>
       </div>
       <div class="body">
         <div class="price">${esc(r.price) || '—'}</div>
@@ -440,11 +481,33 @@ __TOKENS__
 
   const grid = document.getElementById('grid');
   grid.addEventListener('click', e => {
+    // Starring and hiding are opposite verdicts on a listing, so each one
+    // clears the other rather than leaving a listing both pinned and buried.
+    const star = e.target.closest('.star-btn');
+    if (star) {
+      const r = rows[+star.closest('.card').dataset.i];
+      if (starred.has(r.item_id)) {
+        starred.delete(r.item_id);
+      } else {
+        starred.add(r.item_id);
+        hidden.delete(r.item_id);
+      }
+      saveIds(STAR_KEY, starred);
+      saveIds(HIDE_KEY, hidden);
+      render();
+      return;
+    }
     const btn = e.target.closest('.hide-btn');
     if (btn) {
       const r = rows[+btn.closest('.card').dataset.i];
-      hidden.has(r.item_id) ? hidden.delete(r.item_id) : hidden.add(r.item_id);
-      saveHidden();
+      if (hidden.has(r.item_id)) {
+        hidden.delete(r.item_id);
+      } else {
+        hidden.add(r.item_id);
+        starred.delete(r.item_id);
+      }
+      saveIds(HIDE_KEY, hidden);
+      saveIds(STAR_KEY, starred);
       render();
       return;
     }
@@ -455,7 +518,7 @@ __TOKENS__
   grid.addEventListener('keydown', e => {
     if (e.key !== 'Enter' && e.key !== ' ') return;
     const c = e.target.closest('.card');
-    if (c && !e.target.closest('a') && !e.target.closest('.hide-btn')) {
+    if (c && !e.target.closest('a') && !e.target.closest('button')) {
       e.preventDefault();
       lastFocus = c;
       openSheet(rows[+c.dataset.i]);
@@ -488,6 +551,9 @@ __TOKENS__
     else if (sort === 'year-asc') out.sort(byYear(-1));
     else if (sort === 'title') out.sort((a, b) => (a.title || '').localeCompare(b.title || ''));
     else out.sort((a, b) => a._i - b._i);
+    // Starred listings lead every sort. Array#sort is stable, so within the
+    // starred group and the rest the chosen order still holds.
+    out.sort((a, b) => starred.has(b.item_id) - starred.has(a.item_id));
     const shown = showHidden ? out.length - hiddenHere : out.length;
     document.getElementById('count').textContent =
       shown === rows.length ? `${rows.length} listings`

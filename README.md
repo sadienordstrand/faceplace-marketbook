@@ -62,8 +62,7 @@ you acknowledge and accept this risk.
 ## Overview
 
 Every search builds a gallery like this, saved on your computer. You can search
-it, sort by price or year, filter by city, and hide anything you don't want
-to see again.
+it, sort by price or year, filter by city, star your favorite listings, and hide anything you don't want to see again.
 
 ![The gallery a run produces](docs/images/gallery.jpg)
 
@@ -231,9 +230,9 @@ same search twice in a day, the second becomes `..._1`. In each folder:
 In the gallery you can search the text, filter by which city found it, and sort
 by price, year, or title (A-Z). You can also click any card to see the full
 description, or click **View On Facebook** to open the listing in your browser.
-Hover over a card and click the **✕** in the corner to hide listings you're not
-interested in; the app remembers what you've hidden even after you close and
-reopen the page.
+Hover over a card and click the **✕** in the top right corner to hide listings
+you're not interested in, or the star in the top left to mark a favorite. Your 
+browser remembers what you've hidden or starred even after you close the page.
 
 ---
 
