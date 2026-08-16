@@ -24,10 +24,12 @@ drift by an hour twice a year.
 """
 import argparse
 import base64
+import hashlib
 import json
 import os
 import platform
 import re
+import signal
 import smtplib
 import socket
 import ssl
@@ -40,7 +42,9 @@ from email.message import EmailMessage
 from email.utils import formatdate, make_msgid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.error import HTTPError
 from urllib.parse import parse_qs, quote, unquote, urlparse
+from urllib.request import urlopen
 
 import browser
 import descriptions
@@ -73,6 +77,13 @@ GALLERY_NAMES = marks.GALLERY_NAMES
 # server because the gallery is already talking to it, and because the answer to
 # "is the app running?" and "what is starred?" is the same request.
 MARKS_ENDPOINT = marks.ENDPOINT
+# The other path that isn't a gallery: who is answering here, so that the app
+# can tell its own server from anything else that happens to hold the port. A
+# fixed port on loopback is shared by every program and every signed-in account
+# on the machine, and "something accepted a connection" is not the same question
+# as "my server is running".
+HELLO_ENDPOINT = "/_hello"
+APP_MARK = "faceplace-marketbook"
 # An id is 15-odd digits and there are at most a few thousand of them. This is
 # the body of a POST from a web page, so it gets a ceiling.
 MARKS_MAX_BYTES = 1_000_000
@@ -102,6 +113,22 @@ def _support_dir():
 SUPPORT_DIR = _support_dir()
 AGENT_LOG = SUPPORT_DIR / "scheduler.log"
 HEARTBEAT_PATH = SUPPORT_DIR / "last-checkin.json"
+
+# What the gallery server writes down about itself, so a later start can
+# recognise its own predecessor and take the port back.
+#
+# Named after the install folder rather than shared, because which servers we
+# may retire is the whole question. Updating the app leaves the previous
+# version's server running — it's detached on purpose, so that an emailed link
+# still works in the evening — and that one is ours to clear up. A *different*
+# install's server is not: its launch agent would only start it again, and two
+# copies taking turns killing each other is worse than either one losing.
+#
+# In Application Support rather than beside the code because the server is
+# often started by launchd, which macOS forbids from writing under Documents.
+GALLERY_RECORD = SUPPORT_DIR / (
+    "gallery-" + hashlib.sha256(str(ROOT).encode("utf-8")).hexdigest()[:12]
+    + ".json")
 
 # Folders macOS puts behind a permission prompt no background task can answer.
 MAC_PROTECTED = ("Documents", "Desktop", "Downloads")
@@ -1319,6 +1346,9 @@ class _GalleryHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         url = urlparse(self.path)
+        if url.path == HELLO_ENDPOINT:
+            self._reply(hello())
+            return
         if url.path == MARKS_ENDPOINT:
             folder = resolve_run(url.query)
             if not folder:
@@ -1379,12 +1409,154 @@ class _GalleryHandler(BaseHTTPRequestHandler):
         return
 
 
-def _gallery_server_up():
+def hello():
+    """What the server says when asked who it is.
+
+    The runs folder rather than a version: two copies of this app on one
+    computer are both genuinely "the app", and the one that matters is the one
+    serving the galleries you're looking at. Answering with the folder it serves
+    is what lets a caller tell those two apart."""
+    return {"app": APP_MARK, "runs": str(Path(RUNS_DIR).resolve())}
+
+
+def _port_busy():
     try:
         with socket.create_connection((GALLERY_HOST, GALLERY_PORT), timeout=0.3):
             return True
     except OSError:
         return False
+
+
+def gallery_server_here(timeout=0.5):
+    """Who has the gallery port: None if nothing is listening, `{}` if
+    something is but it isn't this app, otherwise what it said about itself.
+
+    Three answers rather than two, because they need three different responses.
+    Nothing listening means start one. Someone else listening means don't try —
+    the bind would fail — and say so, since no amount of retrying will move
+    them. Our own server means carry on."""
+    if not _port_busy():
+        return None
+    try:
+        url = f"http://{GALLERY_HOST}:{GALLERY_PORT}{HELLO_ENDPOINT}"
+        with urlopen(url, timeout=timeout) as r:
+            said = json.loads(r.read(4096).decode("utf-8"))
+        if said.get("app") == APP_MARK and said.get("runs"):
+            return said
+    except HTTPError as e:
+        # An answer, just not one of ours — an older build of this same app
+        # would 404 this. Closed by hand because urlopen raises it still open.
+        e.close()
+    except Exception:
+        # Or not a web server at all. Not ours is the whole of the answer.
+        pass
+    return {}
+
+
+def _is_ours(said):
+    """Our server, serving the runs folder this process cares about. A second
+    install answering for its own runs is somebody else as far as we're
+    concerned: its galleries aren't the ones we're about to open."""
+    return bool(said) and said.get("runs") == str(Path(RUNS_DIR).resolve())
+
+
+def _gallery_server_up():
+    return _is_ours(gallery_server_here())
+
+
+def write_gallery_record():
+    """Leave a note saying which process is serving galleries for this install.
+
+    Best-effort on purpose: failing to write it costs a later start the ability
+    to tidy up after this one, which is worth strictly less than the server
+    itself starting."""
+    try:
+        SUPPORT_DIR.mkdir(parents=True, exist_ok=True)
+        GALLERY_RECORD.write_text(json.dumps(
+            {"pid": os.getpid(), "port": GALLERY_PORT,
+             "runs": str(Path(RUNS_DIR).resolve()),
+             "started": iso(now_local())}), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def clear_gallery_record():
+    try:
+        GALLERY_RECORD.unlink()
+    except OSError:
+        pass
+
+
+def process_command(pid):
+    """The full command line of a running process, or None if it isn't running
+    or can't be read.
+
+    Asked of the OS rather than kept in memory because the process being
+    identified was started by some earlier run of this app that no longer
+    exists. None is the safe answer everywhere: every caller treats "can't
+    tell" as "leave it alone"."""
+    try:
+        if os_name() == "windows":
+            out = subprocess.run(
+                ["powershell", "-NoProfile", "-Command",
+                 f"(Get-CimInstance Win32_Process -Filter "
+                 f"'ProcessId={int(pid)}').CommandLine"],
+                capture_output=True, text=True, timeout=6)
+        else:
+            out = subprocess.run(["ps", "-p", str(int(pid)), "-o", "command="],
+                                 capture_output=True, text=True, timeout=6)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    return out.stdout.strip() or None
+
+
+def our_old_server():
+    """The process id of a gallery server this install left behind, or None.
+
+    Every check here exists to stop the one bad outcome, which is signalling
+    some unrelated program. Process ids get reused, so being alive is not
+    enough — the command line has to still name this install's scheduler and
+    the flag that makes it a server. Anything unreadable, unrecognised or
+    merely plausible is left alone."""
+    try:
+        rec = json.loads(GALLERY_RECORD.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    pid = rec.get("pid")
+    if not isinstance(pid, int) or pid <= 0 or pid == os.getpid():
+        return None
+    if rec.get("port") != GALLERY_PORT:
+        return None
+    cmd = process_command(pid)
+    if not cmd or "--serve-galleries" not in cmd:
+        return None
+    if str(paths.SCHEDULER_ENTRY) not in cmd:
+        return None
+    return pid
+
+
+def retire_old_server(pid, wait=3.0):
+    """Ask a predecessor of ours to stop, and say whether the port came free.
+
+    A polite signal and no escalation. A server that ignores SIGTERM is one we
+    don't understand, and forcing the issue is how a mistake in the checks
+    above turns into some other program being killed. If it won't go, the
+    caller explains the situation instead, which is a worse outcome than
+    working but a much better one than that."""
+    try:
+        if os_name() == "windows":
+            subprocess.run(["taskkill", "/PID", str(int(pid))],
+                           capture_output=True, timeout=6)
+        else:
+            os.kill(pid, signal.SIGTERM)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return False
+    deadline = time.monotonic() + wait
+    while time.monotonic() < deadline:
+        if not _port_busy():
+            return True
+        time.sleep(0.1)
+    return False
 
 
 GALLERY_SERVER_WAIT = 4.0
@@ -1403,8 +1575,20 @@ def ensure_gallery_server(wait=GALLERY_SERVER_WAIT):
     its attachments with no server at all; a gallery opened without one is
     read-only and says so. Both callers want to know which happened, though,
     which is why the answer is returned rather than swallowed."""
-    if _gallery_server_up():
+    here = gallery_server_here()
+    if _is_ours(here):
         return True
+    if here is not None:
+        # Something else holds the port. If it's the server this install had
+        # running before it was updated, it's ours to clear up: the new code is
+        # on disk but that process is still running the old, and it will hold
+        # the port until the machine restarts. Anything else, we leave alone
+        # and explain — spawning would only produce a process that fails to
+        # bind and exits, after the caller waited out the full timeout for an
+        # answer that was already known.
+        pid = our_old_server()
+        if not (pid and retire_old_server(pid)):
+            return False
     kw = dict(cwd=str(ROOT), stdout=subprocess.DEVNULL,
               stderr=subprocess.DEVNULL)
     if os_name() == "windows":
@@ -1450,22 +1634,70 @@ FIREWALL_STEPS = {
 }
 
 
+OPENING = ("Gallery opened, but the app isn't able to save your changes when "
+           "you hide or star a listing.")
+
+
+def taken_port_help(said):
+    """The one cause that can be named for certain, so it is.
+
+    Everything else this message covers is guesswork between three
+    indistinguishable failures, but a program answering on the port is a fact,
+    and retrying or opening the firewall will not shift it. Other accounts get a
+    line of their own because loopback is shared across all of them: signing
+    into a second account doesn't get you a second port, and a copy left running
+    under your other login is invisible from here in every way except this."""
+    lines = [OPENING, ""]
+    if said.get("app") == APP_MARK:
+        lines += ["Another copy of Faceplace Marketbook is already running on "
+                  "this computer and is using the connection galleries save "
+                  "through.",
+                  "",
+                  f"That copy is working out of:\n    {said.get('runs')}",
+                  "",
+                  "To fix it:",
+                  "1. Quit that copy of the app, then click Open the gallery "
+                  "again.",
+                  "2. If you're signed into another user account on this Mac, "
+                  "check there too — switching accounts doesn't stop the copy "
+                  "running under the other one. Logging out of it entirely "
+                  "does."]
+    else:
+        lines += [f"Something else on this computer is using the connection "
+                  f"galleries save through (port {GALLERY_PORT}).",
+                  "",
+                  "To fix it:",
+                  # First because it's the likeliest and the least guessable.
+                  # An older version's server is left running by design, and
+                  # quitting the app doesn't stop it, so anyone following the
+                  # ordinary advice gets nowhere.
+                  "1. If the app updated itself recently, the version it "
+                  "replaced may still be running in the background. Restart "
+                  "the computer and it will be gone.",
+                  "2. Otherwise it's another program holding that connection. "
+                  "Quitting it and clicking Open the gallery again is enough; "
+                  "restarting also does it."]
+    return "\n".join(lines)
+
+
 def gallery_server_help():
     """Why a gallery opened read-only and what to do about it, for the Past
     searches tab.
 
-    Deliberately vague about the cause and specific about the fix. From out here
-    a blocked firewall, a port something else has taken and a launch that failed
-    all look the same, and naming the wrong one sends someone digging through
-    settings for a problem they don't have. So the first step is the one that
-    fixes the two causes nobody can do anything about — try it again — and the
-    firewall comes second, because it's the only one of the three that asks a
-    question a person can answer wrong.
+    Specific when it can be and vague when it can't. A program sitting on the
+    port can be detected and named outright; a blocked firewall, a launch that
+    failed and a server still starting cannot be told apart from out here, and
+    naming the wrong one of those sends someone digging through settings for a
+    problem they don't have. So that branch leads with the retry that fixes the
+    two nobody can act on, and puts the firewall second as the only one of the
+    three that asks a question a person can answer wrong.
 
     Rendered in a box that keeps line breaks, so the steps are numbered lines
     rather than a paragraph to pick apart."""
-    lines = ["Gallery opened, but the app isn't able to save your changes when "
-             "you hide or star a listing.",
+    here = gallery_server_here()
+    if here is not None and not _is_ours(here):
+        return taken_port_help(here)
+    lines = [OPENING,
              "",
              "To fix it:",
              "1. Click Open the gallery again. It often just needed a moment "
@@ -1487,10 +1719,14 @@ def serve_galleries():
         httpd = ThreadingHTTPServer((GALLERY_HOST, GALLERY_PORT), _GalleryHandler)
     except OSError:
         return
+    # Only once the port is actually held, so the note never names a process
+    # that lost the race to bind.
+    write_gallery_record()
     try:
         httpd.serve_forever()
     finally:
         httpd.server_close()
+        clear_gallery_record()
 
 
 def _gallery_html(summary, accent):

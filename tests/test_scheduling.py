@@ -1288,25 +1288,284 @@ class TestGalleryServer(unittest.TestCase):
         self.assertEqual(raised.exception.code, 404)
         raised.exception.close()
 
-    def test_ensure_starts_the_server_when_nothing_is_listening(self):
+    # The port answers say who is on it: None for nobody, {} for someone who
+    # isn't us, and what it told us if it is. Stubbing that rather than
+    # `_gallery_server_up` keeps these off the real port 18741, where a server
+    # left running from an actual app would decide the result.
+    def on_the_port(self, answer):
+        self.addCleanup(setattr, sc, "gallery_server_here",
+                        sc.gallery_server_here)
+        sc.gallery_server_here = lambda *a, **kw: answer
+
+    def watch_spawns(self):
         started = []
-        self.addCleanup(setattr, sc, "_gallery_server_up", sc._gallery_server_up)
         self.addCleanup(setattr, sc.subprocess, "Popen", sc.subprocess.Popen)
-        sc._gallery_server_up = lambda: False
         sc.subprocess.Popen = lambda cmd, **kw: started.append(cmd)
+        return started
+
+    def test_ensure_starts_the_server_when_nothing_is_listening(self):
+        self.on_the_port(None)
+        started = self.watch_spawns()
         # wait=0: nothing was really started, so waiting for it to answer would
         # be four seconds of sleeping for a foregone conclusion.
         self.assertFalse(sc.ensure_gallery_server(wait=0))
         self.assertEqual(started[0][-1], "--serve-galleries")
 
     def test_ensure_does_not_spawn_a_second_server(self):
-        started = []
-        self.addCleanup(setattr, sc, "_gallery_server_up", sc._gallery_server_up)
-        self.addCleanup(setattr, sc.subprocess, "Popen", sc.subprocess.Popen)
-        sc._gallery_server_up = lambda: True
-        sc.subprocess.Popen = lambda cmd, **kw: started.append(cmd)
+        self.on_the_port(sc.hello())
+        started = self.watch_spawns()
         self.assertTrue(sc.ensure_gallery_server())
         self.assertEqual(started, [])
+
+    # ------------------------------------------- someone else has the port
+    def test_hello_names_the_app_and_the_folder_it_serves(self):
+        said = sc.hello()
+        self.assertEqual(said["app"], sc.APP_MARK)
+        self.assertEqual(said["runs"], str(self.runs.resolve()))
+
+    def test_a_stranger_on_the_port_is_not_mistaken_for_us(self):
+        """The bug this whole check exists for.
+
+        Anything at all can hold a fixed port on loopback — another program, or
+        a build of this app old enough not to know the question. Accepting a
+        TCP connection was being read as "my server is running", which sent the
+        browser to a URL that stranger could only 404.
+        """
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        class Stranger(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_error(404, "Not found")
+
+            def log_message(self, *a):
+                return
+
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), Stranger)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        self.addCleanup(httpd.server_close)
+        self.addCleanup(httpd.shutdown)
+        self.addCleanup(setattr, sc, "GALLERY_PORT", sc.GALLERY_PORT)
+        sc.GALLERY_PORT = httpd.server_address[1]
+
+        self.assertEqual(sc.gallery_server_here(), {})
+        self.assertFalse(sc._gallery_server_up())
+        started = self.watch_spawns()
+        self.assertFalse(sc.ensure_gallery_server(wait=0))
+        # Spawning would only make a process that can't bind and dies.
+        self.assertEqual(started, [])
+
+    def test_our_own_server_is_recognised(self):
+        from http.server import ThreadingHTTPServer
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), sc._GalleryHandler)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        self.addCleanup(httpd.server_close)
+        self.addCleanup(httpd.shutdown)
+        self.addCleanup(setattr, sc, "GALLERY_PORT", sc.GALLERY_PORT)
+        sc.GALLERY_PORT = httpd.server_address[1]
+
+        self.assertEqual(sc.gallery_server_here()["runs"],
+                         str(self.runs.resolve()))
+        self.assertTrue(sc._gallery_server_up())
+
+    def test_a_second_install_of_this_app_is_still_not_us(self):
+        # Two copies on one computer are both honestly "the app", and the port
+        # only fits one. The one holding it serves its own runs folder, so its
+        # answers are about somebody else's searches.
+        self.on_the_port({"app": sc.APP_MARK, "runs": "/elsewhere/runs"})
+        started = self.watch_spawns()
+        self.assertFalse(sc._gallery_server_up())
+        self.assertFalse(sc.ensure_gallery_server(wait=0))
+        self.assertEqual(started, [])
+
+    def test_the_note_names_the_other_copy_and_where_it_is(self):
+        self.on_the_port({"app": sc.APP_MARK, "runs": "/elsewhere/runs"})
+        note = sc.gallery_server_help()
+        self.assertIn("Another copy of Faceplace Marketbook", note)
+        self.assertIn("/elsewhere/runs", note)
+        # The half nobody thinks of: loopback is shared between accounts, so a
+        # copy running under the other login holds this port too.
+        self.assertIn("another user account", note)
+        # Firewall steps would be a wild goose chase here.
+        self.assertNotIn("firewall", note.lower())
+
+    def test_the_note_for_a_stranger_names_the_port(self):
+        self.on_the_port({})
+        note = sc.gallery_server_help()
+        self.assertIn(str(sc.GALLERY_PORT), note)
+        self.assertNotIn("firewall", note.lower())
+
+    # ------------------------------------- taking the port back after an update
+    def a_record(self, **over):
+        """The note a gallery server of ours leaves behind. Written to a real
+        file because reading it back is half of what's being tested."""
+        rec = {"pid": 424242, "port": sc.GALLERY_PORT,
+               "runs": str(self.runs.resolve()), "started": "2026-08-16T12:00:00"}
+        rec.update(over)
+        self.addCleanup(setattr, sc, "GALLERY_RECORD", sc.GALLERY_RECORD)
+        sc.GALLERY_RECORD = Path(self.tmp.name) / "gallery-record.json"
+        sc.GALLERY_RECORD.write_text(json.dumps(rec), encoding="utf-8")
+        return rec
+
+    def pretend_command(self, cmd):
+        self.addCleanup(setattr, sc, "process_command", sc.process_command)
+        sc.process_command = lambda pid: cmd
+
+    def a_real_server_command(self):
+        return f"/usr/bin/python3 {sc.paths.SCHEDULER_ENTRY} --serve-galleries"
+
+    def watch_kills(self):
+        killed = []
+        self.addCleanup(setattr, sc, "retire_old_server", sc.retire_old_server)
+        sc.retire_old_server = lambda pid, **kw: killed.append(pid) or True
+        return killed
+
+    def test_the_server_writes_down_what_it_is(self):
+        self.addCleanup(setattr, sc, "GALLERY_RECORD", sc.GALLERY_RECORD)
+        sc.GALLERY_RECORD = Path(self.tmp.name) / "rec.json"
+        sc.write_gallery_record()
+        rec = json.loads(sc.GALLERY_RECORD.read_text())
+        self.assertEqual(rec["pid"], os.getpid())
+        self.assertEqual(rec["port"], sc.GALLERY_PORT)
+        sc.clear_gallery_record()
+        self.assertFalse(sc.GALLERY_RECORD.exists())
+
+    def test_a_predecessor_of_ours_is_recognised(self):
+        self.a_record()
+        self.pretend_command(self.a_real_server_command())
+        self.assertEqual(sc.our_old_server(), 424242)
+
+    def test_an_updated_app_takes_its_own_port_back(self):
+        """The case nearly everyone meets exactly once.
+
+        Updating leaves the old version's server running — detached on purpose,
+        so an emailed link still works hours later — and it holds the port with
+        code that predates whatever the update added. It's ours, so it goes.
+        """
+        self.on_the_port({})            # a stranger, as far as /_hello knows
+        self.a_record()
+        self.pretend_command(self.a_real_server_command())
+        killed = self.watch_kills()
+        started = self.watch_spawns()
+        sc.ensure_gallery_server(wait=0)
+        self.assertEqual(killed, [424242])
+        self.assertEqual(started[0][-1], "--serve-galleries")
+
+    def test_a_predecessor_that_will_not_go_is_explained_instead(self):
+        self.on_the_port({})
+        self.a_record()
+        self.pretend_command(self.a_real_server_command())
+        self.addCleanup(setattr, sc, "retire_old_server", sc.retire_old_server)
+        sc.retire_old_server = lambda pid, **kw: False
+        started = self.watch_spawns()
+        self.assertFalse(sc.ensure_gallery_server(wait=0))
+        self.assertEqual(started, [])
+
+    # The rest of these are all the same test: don't signal that process.
+    def test_a_recycled_process_id_is_left_alone(self):
+        # The record outlives the process, and the number gets handed to
+        # something else. Killing by a remembered pid alone is how an app
+        # quietly closes somebody's unrelated work.
+        self.on_the_port({})
+        self.a_record()
+        self.pretend_command("/Applications/Photos.app/Contents/MacOS/Photos")
+        killed = self.watch_kills()
+        self.assertIsNone(sc.our_old_server())
+        self.assertFalse(sc.ensure_gallery_server(wait=0))
+        self.assertEqual(killed, [])
+
+    def test_a_server_from_another_install_is_left_alone(self):
+        # Not ours to retire: its launch agent would start it straight back,
+        # and two copies killing each other in turn is worse than one losing.
+        self.on_the_port({"app": sc.APP_MARK, "runs": "/elsewhere/runs"})
+        self.a_record()
+        self.pretend_command(
+            "/usr/bin/python3 /elsewhere/src/scheduling.py --serve-galleries")
+        killed = self.watch_kills()
+        self.assertIsNone(sc.our_old_server())
+        self.assertFalse(sc.ensure_gallery_server(wait=0))
+        self.assertEqual(killed, [])
+
+    def test_a_dead_process_is_not_signalled(self):
+        self.on_the_port({})
+        self.a_record()
+        self.pretend_command(None)      # ps says nothing is there
+        self.assertIsNone(sc.our_old_server())
+
+    def test_a_record_for_a_different_port_is_ignored(self):
+        self.a_record(port=sc.GALLERY_PORT + 1)
+        self.pretend_command(self.a_real_server_command())
+        self.assertIsNone(sc.our_old_server())
+
+    def test_our_own_process_id_is_never_the_predecessor(self):
+        self.a_record(pid=os.getpid())
+        self.pretend_command(self.a_real_server_command())
+        self.assertIsNone(sc.our_old_server())
+
+    def test_a_missing_or_corrupt_record_is_not_a_crash(self):
+        self.addCleanup(setattr, sc, "GALLERY_RECORD", sc.GALLERY_RECORD)
+        sc.GALLERY_RECORD = Path(self.tmp.name) / "nope.json"
+        self.assertIsNone(sc.our_old_server())
+        sc.GALLERY_RECORD.write_text("{not json", encoding="utf-8")
+        self.assertIsNone(sc.our_old_server())
+        sc.GALLERY_RECORD.write_text('{"pid": "twelve"}', encoding="utf-8")
+        self.assertIsNone(sc.our_old_server())
+
+    def test_reading_and_retiring_a_real_process(self):
+        """The one test here that talks to the operating system.
+
+        Everything above stubs `process_command`, which means the guard that
+        matters most — is this pid still one of our servers? — is only ever
+        checked against a string this file wrote. So: a real child process,
+        holding a real port, with an argv shaped like the real thing, read back
+        with real `ps` and then actually signalled.
+        """
+        import socket as _socket
+        with _socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+        # Holds the port and ignores everything until it's asked to stop. The
+        # trailing arguments are there to be read back out of `ps`.
+        child = subprocess.Popen(
+            [sys.executable, "-c",
+             "import socket, time\n"
+             "s = socket.socket()\n"
+             "s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)\n"
+             f"s.bind(('127.0.0.1', {port}))\n"
+             "s.listen(5)\n"
+             "time.sleep(60)\n",
+             str(sc.paths.SCHEDULER_ENTRY), "--serve-galleries"])
+        self.addCleanup(child.wait)
+        self.addCleanup(child.kill)
+        self.addCleanup(setattr, sc, "GALLERY_PORT", sc.GALLERY_PORT)
+        sc.GALLERY_PORT = port
+        for _ in range(50):
+            if sc._port_busy():
+                break
+            time.sleep(0.1)
+        self.assertTrue(sc._port_busy(), "the child never took the port")
+
+        self.assertIn("--serve-galleries", sc.process_command(child.pid) or "")
+        self.a_record(pid=child.pid, port=port)
+        self.assertEqual(sc.our_old_server(), child.pid)
+        self.assertTrue(sc.retire_old_server(child.pid))
+        self.assertFalse(sc._port_busy())
+
+    def test_the_note_for_a_stranger_points_at_a_left_over_version(self):
+        # The likeliest cause of this message and the one nobody would guess,
+        # because quitting the app doesn't stop the server it started.
+        self.on_the_port({})
+        note = sc.gallery_server_help()
+        self.assertIn("updated itself recently", note)
+        self.assertIn("Restart the computer", note)
+
+    def test_the_firewall_steps_are_only_for_when_nothing_answers(self):
+        # Three failures look alike here and none can be named, so this is the
+        # branch that guesses. It must not be reached when we do know.
+        self.on_the_port(None)
+        note = sc.gallery_server_help()
+        self.assertIn("1. Click Open the gallery again", note)
+        if sc.os_name() in sc.FIREWALL_STEPS:
+            self.assertIn("firewall", note.lower())
 
 
 # ------------------------------------------------------------------ attachments

@@ -555,6 +555,48 @@ switching to another *application* and back doesn't hide the tab, so
 `visibilitychange` never fires for the case this exists for. A flag holds off
 overlapping probes, and no run id means it doesn't ask at all.
 
+**"Something accepted a connection" is not "my server is running."** A fixed
+port on loopback is shared by every program on the computer and by every
+signed-in account at once, so `ensure_gallery_server()` asks `/_hello` and
+checks the answer instead of just opening a socket. The reply names the app and
+the runs folder it serves — the folder rather than a version, because two copies
+of this app on one machine are both honestly "the app", and the one that matters
+is the one serving the galleries you're about to open. Three outcomes, because
+they need three responses: nothing listening means start one, our own server
+means carry on, and anyone else means don't spawn a process that could only fail
+to bind, and say so.
+
+**One kind of squatter is ours to clear up.** Updating the app leaves the
+previous version's server running — detached on purpose, so an emailed link
+still works that evening — holding the port with code from before the update,
+until the machine restarts. So `serve_galleries()` writes `GALLERY_RECORD` when
+it takes the port, and a later start reads it, confirms the process is still one
+of ours, retires it with SIGTERM and takes the port back. The record is named
+after the install folder, because *which* servers may be retired is the whole
+question: a different install's server is not ours, its launch agent would only
+start it again, and two copies killing each other in turn is worse than one
+losing. It lives in Application Support rather than beside the code, since
+launchd can't write under Documents on macOS.
+
+The checks before that signal all guard one outcome — signalling an unrelated
+program. Process ids get reused, so being alive isn't enough: `our_old_server()`
+reads the live command line out of `ps` and requires it to still name this
+install's scheduler and `--serve-galleries`. Anything unreadable or merely
+plausible is left alone, and there's no escalation past SIGTERM, because a
+server that ignores it is one we don't understand. A server started before this
+record existed can't be tidied up this way, which is why the wording for an
+unidentifiable squatter leads with the left-over-version case.
+
+That last case is the only failure here that can be named for certain, so
+`taken_port_help()` names it, including the other copy's folder. Everything else
+this message covers is a guess between a blocked firewall, a failed launch and a
+server still starting, and sending someone to their firewall over a port
+collision costs them hours: the gallery opens fine, it just can't save, and
+nothing in the firewall is wrong. The other-account line is there because
+loopback is shared across logins — signing into a second account doesn't get you
+a second port, and a copy left running under the other one is invisible from
+here in every way except this.
+
 Because the buttons depend on it, the server is now started when the app window
 opens, not only by `--tick` and `--install`, and `ensure_gallery_server()`
 returns whether it came up. `open_run()` serves the gallery over localhost when

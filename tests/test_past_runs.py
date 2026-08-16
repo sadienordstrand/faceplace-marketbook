@@ -44,12 +44,19 @@ class Redirected(unittest.TestCase):
         self.server_up = True
         self._real_ensure = sc.ensure_gallery_server
         sc.ensure_gallery_server = lambda *a, **kw: self.server_up
+        # And who holds the port, which decides the wording when it's down.
+        # Stubbed for the same reason: left real, these read whatever happens to
+        # be listening on this machine and the answer changes by the day.
+        self.on_port = None
+        self._real_here = sc.gallery_server_here
+        sc.gallery_server_here = lambda *a, **kw: self.on_port
         self.addCleanup(self._restore)
 
     def _restore(self):
         pr.RUNS_DIR = self._saved
         pr.webbrowser.open = self._real_open
         sc.ensure_gallery_server = self._real_ensure
+        sc.gallery_server_here = self._real_here
         self.tmp.cleanup()
 
     # ------------------------------------------------------------- fixtures
@@ -213,6 +220,18 @@ class Opening(Redirected):
         if sc.os_name() in sc.FIREWALL_STEPS:
             self.assertIn("firewall", note.lower())
             self.assertIn("3.", note)
+
+    def test_a_second_copy_of_the_app_is_named_rather_than_guessed_at(self):
+        # The one failure that can be identified for certain. Sending someone
+        # to their firewall settings over this costs hours: it opens fine, it
+        # just quietly can't save, and nothing in the firewall is wrong.
+        self.make_run("defender_110_08-09-2026", self.manifest())
+        self.server_up = False
+        self.on_port = {"app": sc.APP_MARK, "runs": "/elsewhere/runs"}
+        note = pr.open_run("defender_110_08-09-2026")["note"]
+        self.assertIn("Another copy of Faceplace Marketbook", note)
+        self.assertIn("/elsewhere/runs", note)
+        self.assertNotIn("firewall", note.lower())
 
     def test_a_gallery_that_opened_normally_says_nothing(self):
         self.make_run("defender_110_08-09-2026", self.manifest())
