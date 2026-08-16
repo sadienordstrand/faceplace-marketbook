@@ -6,6 +6,12 @@ Offline tests for the Past searches tab.
 
 Nothing here opens a browser: the one call that would is replaced, and every
 folder these read is built in a temporary directory first.
+
+Nothing here starts the localhost gallery server either, and — just as
+important — nothing here asks whether one is already running. It would be, on
+the machine of anyone who has the app open, and then these tests would pass or
+fail depending on that rather than on the code. Which of the two answers
+open_run gets is set per test instead.
 """
 import csv
 import json
@@ -18,6 +24,7 @@ from tempfile import TemporaryDirectory
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 import past_runs as pr
+import scheduling as sc
 
 
 class Redirected(unittest.TestCase):
@@ -32,11 +39,17 @@ class Redirected(unittest.TestCase):
         self.opened = []
         self._real_open = pr.webbrowser.open
         pr.webbrowser.open = lambda url, **kw: self.opened.append(url) or True
+        # Answering without going near a socket. The default is the usual case:
+        # the app is open, so the server it starts is up.
+        self.server_up = True
+        self._real_ensure = sc.ensure_gallery_server
+        sc.ensure_gallery_server = lambda *a, **kw: self.server_up
         self.addCleanup(self._restore)
 
     def _restore(self):
         pr.RUNS_DIR = self._saved
         pr.webbrowser.open = self._real_open
+        sc.ensure_gallery_server = self._real_ensure
         self.tmp.cleanup()
 
     # ------------------------------------------------------------- fixtures
@@ -153,27 +166,71 @@ class Listing(Redirected):
 
 
 class Opening(Redirected):
+    def served(self, folder, name="gallery.html"):
+        return sc.gallery_url((folder / name).resolve())
+
     def test_clicking_a_run_opens_its_gallery(self):
         folder = self.make_run("defender_110_08-09-2026", self.manifest())
         res = pr.open_run("defender_110_08-09-2026")
         self.assertNotIn("error", res)
+        self.assertEqual(self.opened, [self.served(folder)])
+
+    def test_the_gallery_is_served_rather_than_handed_over_as_a_file(self):
+        # Same page either way, but only a served one can save a star: the page
+        # has somewhere to send it, and the file on disk gets rewritten so the
+        # mark is in the copy you'd email.
+        folder = self.make_run("defender_110_08-09-2026", self.manifest())
+        pr.open_run("defender_110_08-09-2026")
+        self.assertTrue(self.opened[0].startswith("http://127.0.0.1:"))
+        self.assertIn("gallery.html", self.opened[0])
+        self.assertTrue((folder / "gallery.html").exists())
+
+    def test_without_a_server_the_file_itself_is_opened_instead(self):
+        # Better a read-only gallery than no gallery.
+        folder = self.make_run("defender_110_08-09-2026", self.manifest())
+        self.server_up = False
+        res = pr.open_run("defender_110_08-09-2026")
+        self.assertNotIn("error", res)
         self.assertEqual(self.opened,
                          [(folder / "gallery.html").resolve().as_uri()])
+
+    def test_a_read_only_gallery_says_so_in_the_window(self):
+        # It opened, so nothing looks wrong. The stars quietly not saving is
+        # the kind of thing someone finds out days later.
+        self.make_run("defender_110_08-09-2026", self.manifest())
+        self.server_up = False
+        note = pr.open_run("defender_110_08-09-2026")["note"]
+        self.assertIn("isn't able to save your changes", note)
+
+    def test_the_read_only_note_says_what_to_do_about_it(self):
+        # Whoever reads this is somewhere they didn't mean to be, and the two
+        # causes they can't fix are indistinguishable from the one they can —
+        # so it opens with the retry that covers both of those.
+        self.make_run("defender_110_08-09-2026", self.manifest())
+        self.server_up = False
+        note = pr.open_run("defender_110_08-09-2026")["note"]
+        self.assertIn("1. Click Open the gallery again", note)
+        if sc.os_name() in sc.FIREWALL_STEPS:
+            self.assertIn("firewall", note.lower())
+            self.assertIn("3.", note)
+
+    def test_a_gallery_that_opened_normally_says_nothing(self):
+        self.make_run("defender_110_08-09-2026", self.manifest())
+        self.assertEqual(pr.open_run("defender_110_08-09-2026"), {})
 
     def test_the_self_contained_gallery_is_preferred(self):
         # The lightweight one only works beside its thumbnails folder.
         folder = self.make_run("defender_110_08-09-2026", self.manifest(),
                                files=["lightweight_gallery.html"])
         pr.open_run("defender_110_08-09-2026")
-        self.assertEqual(self.opened,
-                         [(folder / "gallery.html").resolve().as_uri()])
+        self.assertEqual(self.opened, [self.served(folder)])
 
     def test_the_lightweight_one_is_opened_when_it_is_all_there_is(self):
         folder = self.make_run("defender_110_08-09-2026", self.manifest(),
                                gallery=False, files=["lightweight_gallery.html"])
         pr.open_run("defender_110_08-09-2026")
-        self.assertEqual(
-            self.opened, [(folder / "lightweight_gallery.html").resolve().as_uri()])
+        self.assertEqual(self.opened,
+                         [self.served(folder, "lightweight_gallery.html")])
 
     def test_a_run_that_never_built_one_gets_a_gallery_built_now(self):
         folder = self.make_run("no_gallery_08-09-2026", self.manifest(),

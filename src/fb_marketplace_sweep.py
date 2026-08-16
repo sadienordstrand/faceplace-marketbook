@@ -1278,6 +1278,13 @@ def run_from_ui(a):
     import scheduling
     import make_desktop_icon
     import past_runs
+
+    # Start the little localhost server the galleries save their stars and
+    # hides through. It used to be started only when automatic runs were set
+    # up, which left anyone who'd never scheduled a search unable to mark
+    # anything. Not waited on: it takes a moment, nothing here needs it yet,
+    # and opening a gallery waits for it properly.
+    scheduling.ensure_gallery_server(wait=0)
     locs = {}
 
     def ui_add_city(label, text):

@@ -173,6 +173,39 @@ __TOKENS__
   .card.is-hidden { opacity: .45; }
   .card.is-hidden .hide-btn { opacity: 1; }
 
+  /* Read-only: the page is a gallery someone was sent, or the app isn't
+     running, so there is nowhere to put a new mark. The buttons stay where
+     they are and go quiet rather than disappearing — marks already set are
+     information worth showing, and a control that vanishes leaves nothing to
+     ask about. A set mark keeps its full weight; only the empty ones fade.
+     :not(.set) rather than source order, so the rules can't be undone by the
+     starred and hidden ones above. */
+  .imgwrap button.off { cursor: default; }
+  /* No note on a sent copy, so the cursor carries it alone: barred rather than
+     default, because this one is never going to work rather than not working
+     yet. */
+  .imgwrap button.sealed { cursor: not-allowed; }
+  /* Greyed by colour rather than by fading the whole button out. These sit on
+     top of a photograph, and a half-transparent one over a dark picture reads
+     as no button at all — which would leave the note there is no way to find. */
+  .imgwrap button.off:not(.set) { color: #8B8368; border-color: #3A3A2A; }
+  .imgwrap button.off:not(.set):hover {
+    background: rgba(16, 18, 11, .72); border-color: #3A3A2A;
+  }
+  .imgwrap button.off:not(.set):hover svg { fill: none; }
+  /* The reason, on the same hover that brought the buttons out. A line across
+     the top of every card would say it hundreds of times over. */
+  .locknote {
+    position: absolute; left: 7px; right: 7px; top: 43px; z-index: 3;
+    padding: 7px 9px; pointer-events: none; border-radius: 2px;
+    background: rgba(12, 14, 8, .93); border: 1px solid var(--olive-lt);
+    color: var(--ink); font: 10.5px/1.5 var(--type); letter-spacing: .03em;
+    opacity: 0; transition: opacity .12s ease;
+  }
+  .imgwrap button.off:hover ~ .locknote,
+  .imgwrap button.off:focus-visible ~ .locknote,
+  .imgwrap.saying .locknote { opacity: 1; }
+
   /* Applies in both the card and the detail view, so the placeholder always
      lands dead centre of the image area. */
   .noimg {
@@ -297,6 +330,12 @@ __TOKENS__
   <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle"></div>
 </div>
 <script id="data" type="application/json">__DATA__</script>
+<!-- Which listings are starred and which are hidden. Rewritten in place by the
+     app whenever a mark changes, so the file on disk is always what you'd want
+     to send someone. The id and the exact opening tag are what marks.py looks
+     for; don't reformat them. -->
+<script id="marks" type="application/json">__MARKS__</script>
+<script id="run" type="application/json">__RUN__</script>
 <script>
   const rows = JSON.parse(document.getElementById('data').textContent);
   // Vehicle sellers almost always lead with the model year, so the first
@@ -427,43 +466,114 @@ __TOKENS__
     ><line x1="4.5" y1="4.5" x2="19.5" y2="19.5"/><line
       x1="19.5" y1="4.5" x2="4.5" y2="19.5"/></svg>`;
 
-  // Hidden and starred listings are remembered by item_id, so the state survives
-  // filtering, sorting, reloads, and even a rebuild of this file from a fresh sweep.
-  const HIDE_KEY = 'faceplace-marketbook-hidden';
-  const STAR_KEY = 'faceplace-marketbook-starred';
-  const loadIds = key => {
-    try {
-      return new Set(JSON.parse(localStorage.getItem(key) || '[]'));
-    } catch (e) {
-      return new Set();  // file:// with storage disabled — keep it in memory only
-    }
-  };
-  const saveIds = (key, ids) => {
-    try {
-      localStorage.setItem(key, JSON.stringify([...ids]));
-    } catch (e) { /* no-op */ }
-  };
-  const hidden = loadIds(HIDE_KEY);
-  const starred = loadIds(STAR_KEY);
+  // Hidden and starred listings are remembered by item_id, and they live in
+  // this file: the block above is rewritten by the app every time one changes.
+  // That's what makes them survive being emailed, opened in another browser, or
+  // rebuilt from a fresh sweep — none of which a browser's own storage does.
+  const MARKS = JSON.parse(document.getElementById('marks').textContent);
+  const RUN = JSON.parse(document.getElementById('run').textContent);
+  const starred = new Set(MARKS.starred || []);
+  const hidden = new Set(MARKS.hidden || []);
   let showHidden = false;
+
+  // Saving goes through the app, because a page can't write to the file it was
+  // opened from — no browser allows it, and nothing here gets around that. The
+  // app answers on an address that never leaves this computer, so asking costs
+  // nothing and works with the network off. RUN is null on a gallery that was
+  // emailed: there's no run folder for it on this machine, so it never asks.
+  const HELPER = __HELPER__;
+  const helperUrl = () => HELPER + '?run=' + encodeURIComponent(RUN);
+  // A note is worth showing when there's something to be done about it, and the
+  // two below both name the thing. A gallery someone emailed you has no such
+  // sentence: there's no app on that machine and no run folder for it, so it
+  // gets the barred cursor instead and no explanation nobody can act on.
+  const SEALED = !RUN;
+  const LOCKED = 'Open Faceplace Marketbook to save stars and hides.';
+  const DROPPED = 'Faceplace Marketbook stopped answering, so this gallery is '
+                + 'read-only until you open it from the app again.';
+  let canSave = false;
+  let lockNote = SEALED ? '' : LOCKED;
+
+  const timeout = ms =>
+    (self.AbortSignal && AbortSignal.timeout) ? AbortSignal.timeout(ms) : undefined;
+
+  async function findHelper() {
+    if (!RUN) return;
+    try {
+      const res = await fetch(helperUrl(), { signal: timeout(1500) });
+      if (!res.ok) return;
+      const live = await res.json();
+      // The app's copy is the one that outlives this page, so it wins over
+      // whatever was in the file. They only differ if the file was rebuilt by a
+      // sweep that ran while it was open.
+      starred.clear();
+      (live.starred || []).forEach(id => starred.add(id));
+      hidden.clear();
+      (live.hidden || []).forEach(id => hidden.add(id));
+      canSave = true;
+    } catch (e) {
+      // Nothing listening, or the browser wouldn't let us ask. Either way the
+      // page stays read-only, which is the answer that can't lose a click.
+    }
+  }
+
+  // Marks are sent whole rather than as changes, so a burst of clicking can
+  // wait for the pause at the end of it without any of it going missing.
+  let pending = null;
+  function save() {
+    clearTimeout(pending);
+    pending = setTimeout(send, 350);
+  }
+
+  async function send() {
+    if (!canSave) return;
+    try {
+      const res = await fetch(helperUrl(), {
+        method: 'POST',
+        // text/plain keeps this a request the browser will just send. It is
+        // JSON, and the app reads it as JSON.
+        headers: { 'Content-Type': 'text/plain' },
+        body: JSON.stringify({ starred: [...starred], hidden: [...hidden] }),
+        signal: timeout(4000),
+      });
+      if (!res.ok) throw new Error(res.status);
+    } catch (e) {
+      // The app was there when the page loaded and isn't now — quit, most
+      // likely. Stop taking marks rather than taking ones that go nowhere, and
+      // say which of the two situations this is.
+      canSave = false;
+      lockNote = DROPPED;
+      render();
+    }
+  }
 
   function card(r) {
     const isHidden = hidden.has(r.item_id);
     const isStarred = starred.has(r.item_id);
     const meta = [r.listing_location, r.miles].filter(Boolean).join(' · ');
     const found = foundText(r);
+    // aria-disabled rather than disabled: a disabled button can't be focused
+    // or hovered, which would leave a keyboard user with two controls that do
+    // nothing and no way to reach the note saying why.
+    const off = canSave ? '' : (SEALED ? ' off sealed' : ' off');
+    const lock = canSave ? '' : ' aria-disabled="true"';
     return `<div class="card${isStarred ? ' is-starred' : ''}${isHidden ? ' is-hidden' : ''}"
                  data-i="${r._i}" tabindex="0">
       <div class="imgwrap">${imgTag(r, true)}
-        <button type="button" class="star-btn" aria-pressed="${isStarred}"
+        <button type="button" class="star-btn${off}${isStarred ? ' set' : ''}"
+                aria-pressed="${isStarred}"${lock}
                 aria-label="${isStarred ? 'Unstar' : 'Star'} this listing"
-                title="${isStarred ? 'Unstar this listing'
-                                  : 'Star this listing to keep it at the top'}"
+                title="${canSave ? (isStarred ? 'Unstar this listing'
+                                  : 'Star this listing to keep it at the top') : ''}"
         >${STAR_ICON}</button>
-        <button type="button" class="hide-btn${isHidden ? ' wide' : ''}"
+        <button type="button" class="hide-btn${off}${isHidden ? ' set wide' : ''}"
+                ${lock}
                 aria-label="${isHidden ? 'Unhide' : 'Hide'} this listing"
-                title="${isHidden ? 'Unhide' : 'Hide'} this listing"
+                title="${canSave ? (isHidden ? 'Unhide this listing'
+                                             : 'Hide this listing') : ''}"
         >${isHidden ? 'UNHIDE' : CROSS_ICON}</button>
+        ${canSave || !lockNote ? ''
+          : `<div class="locknote">${esc(lockNote)}</div>`}
       </div>
       <div class="body">
         <div class="price">${esc(r.price) || '—'}</div>
@@ -516,12 +626,26 @@ __TOKENS__
     lastFocus?.focus();
   }
 
+  // Clicking a quiet button shows the note the hover would have. People click
+  // before they read, and on a touchscreen there is no hover to have.
+  let sayTimer = null;
+  function explain(btn) {
+    if (!lockNote) return;
+    const wrap = btn.closest('.imgwrap');
+    clearTimeout(sayTimer);
+    document.querySelectorAll('.imgwrap.saying')
+            .forEach(el => el.classList.remove('saying'));
+    wrap.classList.add('saying');
+    sayTimer = setTimeout(() => wrap.classList.remove('saying'), 3200);
+  }
+
   const grid = document.getElementById('grid');
   grid.addEventListener('click', e => {
     // Starring and hiding are opposite verdicts on a listing, so each one
     // clears the other rather than leaving a listing both pinned and buried.
     const star = e.target.closest('.star-btn');
     if (star) {
+      if (!canSave) { explain(star); return; }
       const r = rows[+star.closest('.card').dataset.i];
       if (starred.has(r.item_id)) {
         starred.delete(r.item_id);
@@ -529,13 +653,13 @@ __TOKENS__
         starred.add(r.item_id);
         hidden.delete(r.item_id);
       }
-      saveIds(STAR_KEY, starred);
-      saveIds(HIDE_KEY, hidden);
+      save();
       render();
       return;
     }
     const btn = e.target.closest('.hide-btn');
     if (btn) {
+      if (!canSave) { explain(btn); return; }
       const r = rows[+btn.closest('.card').dataset.i];
       if (hidden.has(r.item_id)) {
         hidden.delete(r.item_id);
@@ -543,8 +667,7 @@ __TOKENS__
         hidden.add(r.item_id);
         starred.delete(r.item_id);
       }
-      saveIds(HIDE_KEY, hidden);
-      saveIds(STAR_KEY, starred);
+      save();
       render();
       return;
     }
@@ -606,7 +729,39 @@ __TOKENS__
       : '<div class="empty">No listings match.</div>';
   }
   document.getElementById('q').addEventListener('input', render);
+  // Drawn from the file first and again once the app has answered. Waiting for
+  // the answer would leave the page empty for as long as it takes, and what's
+  // in the file is nearly always already right.
+  const settle = () => {
+    // Set once the question has been asked, so "not yet" and "no" are
+    // distinguishable from outside the page.
+    document.body.dataset.marks = canSave ? 'live' : 'locked';
+    render();
+  };
   render();
+  findHelper().then(settle);
+
+  // The note says to open the app. Doing what it says has to be enough, so the
+  // page asks again when it's come back to — no reload, and nothing to think of
+  // on your own.
+  //
+  // Both events, because they cover different halves of it. Going off to open
+  // another application and coming back fires focus but not visibilitychange:
+  // the tab was never hidden, the window just wasn't the front one. Switching
+  // to another tab and back fires visibilitychange. The first is the case this
+  // exists for; the second is free.
+  let probing = false;
+  const recheck = () => {
+    if (canSave || !RUN || probing || document.hidden) return;
+    probing = true;
+    findHelper().then(() => {
+      probing = false;
+      if (canSave) lockNote = LOCKED;
+      settle();
+    });
+  };
+  window.addEventListener('focus', recheck);
+  document.addEventListener('visibilitychange', recheck);
 </script>
 </body>
 </html>

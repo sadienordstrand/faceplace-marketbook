@@ -1211,7 +1211,7 @@ class TestGalleryLink(unittest.TestCase):
             gallery = Path(tmp) / "runs" / "saved" / "d 110" / "gallery.html"
             gallery.parent.mkdir(parents=True)
             gallery.write_text("<html>", encoding="utf-8")
-            self.assertIn(f'href="{sc._gallery_url(str(gallery))}"',
+            self.assertIn(f'href="{sc.gallery_url(str(gallery))}"',
                           self.html(gallery=str(gallery)))
 
 
@@ -1294,7 +1294,9 @@ class TestGalleryServer(unittest.TestCase):
         self.addCleanup(setattr, sc.subprocess, "Popen", sc.subprocess.Popen)
         sc._gallery_server_up = lambda: False
         sc.subprocess.Popen = lambda cmd, **kw: started.append(cmd)
-        sc.ensure_gallery_server()
+        # wait=0: nothing was really started, so waiting for it to answer would
+        # be four seconds of sleeping for a foregone conclusion.
+        self.assertFalse(sc.ensure_gallery_server(wait=0))
         self.assertEqual(started[0][-1], "--serve-galleries")
 
     def test_ensure_does_not_spawn_a_second_server(self):
@@ -1303,7 +1305,7 @@ class TestGalleryServer(unittest.TestCase):
         self.addCleanup(setattr, sc.subprocess, "Popen", sc.subprocess.Popen)
         sc._gallery_server_up = lambda: True
         sc.subprocess.Popen = lambda cmd, **kw: started.append(cmd)
-        sc.ensure_gallery_server()
+        self.assertTrue(sc.ensure_gallery_server())
         self.assertEqual(started, [])
 
 
@@ -1820,8 +1822,8 @@ class TestWakeQueue(Redirected):
                          "pmset repeat wakeorpoweron MTWRFSU 05:00:00")
         self.assertTrue(any(l.startswith("pmset schedule wake")
                             for l in lines[1:]))
-        self.assertEqual(msg, "Your Mac will wake itself for searches "
-                              "scheduled multiple times a day.")
+        self.assertEqual(msg, "Your Mac will wake itself for searches that "
+                              "are scheduled for multiple times a day.")
 
     def test_the_queue_end_date_is_joined_onto_the_sentence(self):
         # Nothing had been written yet above, so that message ends at the full

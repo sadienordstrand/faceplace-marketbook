@@ -159,9 +159,16 @@ def open_run(run_id):
     """Open a run's gallery in the everyday browser. Not in the window asking
     for it: that one is Playwright's, and it closes when a search starts.
 
+    Served over localhost rather than handed to the browser as a file, when
+    there's something to serve it. Both routes show the same page, but a served
+    one can save a star: the page has somewhere to send it, and the file on disk
+    gets rewritten so the mark is in the copy you'd email. A file:// gallery
+    opens read-only and says so on the buttons.
+
     Only the ways this can fail are reported. A gallery that opened is a window
     that just appeared in front of whoever clicked, which says so better than a
-    line of text back in the settings window could."""
+    line of text back in the settings window could — the one exception being a
+    gallery that opened without the marks working, which looks like success."""
     folder = folder_for(run_id)
     if not folder:
         return {"error": "That folder isn't in runs/ any more. Refresh the list."}
@@ -177,12 +184,15 @@ def open_run(run_id):
         except Exception as e:
             return {"error": f"That run has no gallery, and building one now "
                              f"didn't work ({e})."}
+    gallery = gallery.resolve()
+    served = scheduling.ensure_gallery_server()
+    target = (served and scheduling.gallery_url(gallery)) or gallery.as_uri()
     try:
-        webbrowser.open(gallery.resolve().as_uri(), new=1)
+        webbrowser.open(target, new=1)
     except Exception as e:
         return {"error": f"Couldn't open a browser ({e}). The file itself is "
                          f"at {gallery}."}
-    return {}
+    return {} if served else {"note": scheduling.gallery_server_help()}
 
 
 def delete_run(run_id):

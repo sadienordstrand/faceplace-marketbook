@@ -993,8 +993,9 @@ async function openRun(card) {
   card.classList.remove('busy');
   // A gallery that opened is now in front of them, in another window, saying so
   // itself. Only a failure is worth words, because that's the case where
-  // nothing visible happened.
-  say('runMsg', res.error || '', res.error ? 'bad' : '');
+  // nothing visible happened — plus the one success worth a note, where the
+  // gallery opened but can't save stars and the reason is fixable in here.
+  say('runMsg', res.error || res.note || '', res.error ? 'bad' : '');
 }
 
 // Deleting is permanent, so the button asks for a second click, the same way

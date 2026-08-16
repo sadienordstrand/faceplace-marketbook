@@ -81,8 +81,11 @@ def fake_scheduling(busy=False, what="a manual run", started=None):
     module.AlreadyRunning = AlreadyRunning
     module.run_lock = run_lock
     # Only the settings-window path asks for these, and it doesn't care what's
-    # in them.
+    # in them. The gallery server has to be a no-op rather than missing: the
+    # window starts one on the way up, and a real one would outlive the test
+    # and sit on the port.
     module.ui_hooks = dict
+    module.ensure_gallery_server = lambda *a, **kw: False
     return module
 
 

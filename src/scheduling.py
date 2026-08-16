@@ -40,11 +40,12 @@ from email.message import EmailMessage
 from email.utils import formatdate, make_msgid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import quote, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 import browser
 import descriptions
 import listings
+import marks
 import paths
 import storage
 
@@ -64,9 +65,22 @@ RUNS_DIR = paths.RUNS_DIR
 # http://127.0.0.1 link survives that, and only does anything on this computer
 # — same as the file it points at. The server that answers it is started by
 # every tick and by --install.
-GALLERY_HOST = "127.0.0.1"
-GALLERY_PORT = 18741
-GALLERY_NAMES = ("gallery.html", "lightweight_gallery.html")
+GALLERY_HOST = marks.HOST
+GALLERY_PORT = marks.PORT
+GALLERY_NAMES = marks.GALLERY_NAMES
+# The one path on this server that isn't a gallery: the stars and hides a page
+# reads on the way in and posts back when you click one. It lives under the same
+# server because the gallery is already talking to it, and because the answer to
+# "is the app running?" and "what is starred?" is the same request.
+MARKS_ENDPOINT = marks.ENDPOINT
+# An id is 15-odd digits and there are at most a few thousand of them. This is
+# the body of a POST from a web page, so it gets a ceiling.
+MARKS_MAX_BYTES = 1_000_000
+# An over-long body is refused, but it's read and thrown away first so the
+# refusal is what the browser sees. Answering and hanging up mid-upload resets
+# the connection instead, which reaches the page as an unexplained network
+# error. Only worth doing while the body is still a sane size to swallow.
+MARKS_DRAIN_BYTES = 4_000_000
 
 
 def _support_dir():
@@ -1204,7 +1218,7 @@ def build_report(search, summary, next_run=None, warnings=()):
     T.append("The attached files contain stripped-down versions of the listings "
              "in your search results. To view the full gallery, open Faceplace "
              "Marketbook on your computer and go to the Past searches tab.")
-    url = _gallery_url(summary.get("gallery"))
+    url = gallery_url(summary.get("gallery"))
     if url:
         T.append(url)
         T.append("(This link only works on the computer that ran the search.)")
@@ -1224,7 +1238,7 @@ def _esc(s):
             .replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;"))
 
 
-def _gallery_url(path):
+def gallery_url(path):
     """An http://127.0.0.1 link to a gallery on this computer.
 
     file:// looks like a link in the HTML we write and like ordinary text in
@@ -1261,9 +1275,60 @@ def resolve_gallery(url_path):
     return wanted
 
 
+def resolve_run(query):
+    """The run folder a marks request is about, or None. `query` is the raw
+    query string off the URL."""
+    wanted = parse_qs(query or "").get("run", [""])[0]
+    return marks.run_folder(wanted, RUNS_DIR)
+
+
 class _GalleryHandler(BaseHTTPRequestHandler):
+    def _allow(self):
+        """A gallery double-clicked in Finder is a file:// page, and a browser
+        gives those the origin "null", so there is no origin worth checking
+        against. What keeps this safe is on the other side: the only thing
+        reachable here is one run folder's list of starred listing ids, the
+        server answers on loopback so nothing off this machine can reach it at
+        all, and every id is re-checked before it's stored."""
+        self.send_header("Access-Control-Allow-Origin",
+                         self.headers.get("Origin") or "*")
+        self.send_header("Vary", "Origin")
+
+    def _reply(self, payload, code=200):
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self._allow()
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self._allow()
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        # Browsers are tightening up on pages reaching into a private network,
+        # which is what 127.0.0.1 counts as. Chrome asks for this in the
+        # preflight before it will allow the request; answering it now costs a
+        # header and saves the feature quietly breaking in a future version.
+        self.send_header("Access-Control-Allow-Private-Network", "true")
+        self.send_header("Access-Control-Max-Age", "600")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def do_GET(self):
-        gallery = resolve_gallery(urlparse(self.path).path)
+        url = urlparse(self.path)
+        if url.path == MARKS_ENDPOINT:
+            folder = resolve_run(url.query)
+            if not folder:
+                self._reply({"error": "no such run"}, 404)
+                return
+            # Answering this at all is also how a gallery finds out the app is
+            # running and its marks are worth taking.
+            self._reply(marks.read(folder))
+            return
+        gallery = resolve_gallery(url.path)
         if not gallery:
             self.send_error(404, "Not found")
             return
@@ -1273,6 +1338,42 @@ class _GalleryHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
+
+    def do_POST(self):
+        url = urlparse(self.path)
+        if url.path != MARKS_ENDPOINT:
+            self.send_error(404, "Not found")
+            return
+        folder = resolve_run(url.query)
+        if not folder:
+            self._reply({"error": "no such run"}, 404)
+            return
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = 0
+        if not 0 < length <= MARKS_MAX_BYTES:
+            if 0 < length <= MARKS_DRAIN_BYTES:
+                try:
+                    self.rfile.read(length)
+                except OSError:
+                    pass
+            self._reply({"error": "bad request"}, 400)
+            return
+        try:
+            sent = json.loads(self.rfile.read(length).decode("utf-8"))
+        except (OSError, ValueError, UnicodeDecodeError):
+            self._reply({"error": "bad request"}, 400)
+            return
+        try:
+            saved = marks.write(folder, sent)
+        except OSError as e:
+            self._reply({"error": f"couldn't save ({e})"}, 500)
+            return
+        # The galleries on disk are what gets emailed or opened months later,
+        # so they're brought up to date now rather than at the next build.
+        marks.restamp(folder, saved)
+        self._reply(saved)
 
     def log_message(self, fmt, *args):
         return
@@ -1286,15 +1387,24 @@ def _gallery_server_up():
         return False
 
 
-def ensure_gallery_server():
-    """Start the localhost gallery server if it isn't already answering.
+GALLERY_SERVER_WAIT = 4.0
+
+
+def ensure_gallery_server(wait=GALLERY_SERVER_WAIT):
+    """Start the localhost gallery server if it isn't already answering, and
+    say whether it's answering by the time we stop waiting.
 
     The process outlives the tick that launched it, so a report emailed at 5am
-    still has something listening when the link is clicked that evening. Bind
-    failures (already running, or the port taken) are silent: the email still
-    names Past searches and carries the attachments."""
+    still has something listening when the link is clicked that evening — and so
+    that opening the app once is enough to be able to star things for the rest
+    of the day.
+
+    Nothing here raises. A report email still names Past searches and carries
+    its attachments with no server at all; a gallery opened without one is
+    read-only and says so. Both callers want to know which happened, though,
+    which is why the answer is returned rather than swallowed."""
     if _gallery_server_up():
-        return
+        return True
     kw = dict(cwd=str(ROOT), stdout=subprocess.DEVNULL,
               stderr=subprocess.DEVNULL)
     if os_name() == "windows":
@@ -1310,7 +1420,66 @@ def ensure_gallery_server():
             [python_exe(), str(paths.SCHEDULER_ENTRY), "--serve-galleries"],
             **kw)
     except OSError:
-        pass
+        return False
+    # Python has to start and the socket has to bind, which is fast but not
+    # instant, and the caller is about to hand someone a browser window whose
+    # buttons depend on the answer.
+    deadline = time.monotonic() + wait
+    while time.monotonic() < deadline:
+        if _gallery_server_up():
+            return True
+        time.sleep(0.15)
+    return False
+
+
+# Where each OS keeps the switch, and what the switch is called there. Written
+# out as the clicks rather than the concept: someone reading this is already
+# somewhere they didn't mean to be, and "allow it through your firewall" is only
+# useful to a person who already knows how.
+FIREWALL_STEPS = {
+    "darwin": ('open System Settings \u2192 Network \u2192 Firewall \u2192 '
+               'Options, find Python in the list, and switch it to "Allow '
+               'incoming connections"',
+               "If your Mac asks whether to allow incoming network "
+               "connections, choose Allow."),
+    "windows": ('open Windows Security \u2192 Firewall & network protection '
+                '\u2192 Allow an app through firewall, find Python in the '
+                'list, and tick its box in the Private column',
+                "If Windows asks whether to allow network access, choose "
+                "Allow access."),
+}
+
+
+def gallery_server_help():
+    """Why a gallery opened read-only and what to do about it, for the Past
+    searches tab.
+
+    Deliberately vague about the cause and specific about the fix. From out here
+    a blocked firewall, a port something else has taken and a launch that failed
+    all look the same, and naming the wrong one sends someone digging through
+    settings for a problem they don't have. So the first step is the one that
+    fixes the two causes nobody can do anything about — try it again — and the
+    firewall comes second, because it's the only one of the three that asks a
+    question a person can answer wrong.
+
+    Rendered in a box that keeps line breaks, so the steps are numbered lines
+    rather than a paragraph to pick apart."""
+    lines = ["Gallery opened, but the app isn't able to save your changes when "
+             "you hide or star a listing.",
+             "",
+             "To fix it:",
+             "1. Click Open the gallery again. It often just needed a moment "
+             "longer to start."]
+    steps = FIREWALL_STEPS.get(os_name())
+    if steps:
+        where, prompt = steps
+        lines += [f"2. If you see this again, {where}.",
+                  f"3. If Python isn't in that list, close Faceplace "
+                  f"Marketbook and open it again. {prompt}"]
+    else:
+        lines.append("2. If you see this again, allow Python to accept "
+                     "incoming connections in your firewall settings.")
+    return "\n".join(lines)
 
 
 def serve_galleries():
@@ -1339,7 +1508,7 @@ def _gallery_html(summary, accent):
                 "listings in your search results. To view the full gallery, "
                 "open Faceplace Marketbook on your computer and go to the "
                 "<b>Past searches</b> tab")
-    url = _gallery_url(summary.get("gallery"))
+    url = gallery_url(summary.get("gallery"))
     if not url:
         return f'<p style="{foot}">{attached}.</p>'
     return (f'<p style="{foot}">{attached}, or click the link below.</p>'
@@ -1435,8 +1604,11 @@ def build_attachments(csv_path, new_ids, out_dir=None):
         path = out_dir / name
         # The new-listings gallery is every listing this run found, so a
         # first-found date on it is this run's start on every single card.
+        # editable=False: these get emailed. They carry the stars and hides as
+        # they stand, and can't take new ones — the run folder they'd have to
+        # be saved into is on this computer, not the reader's.
         build_gallery.build(csv_path, path, images=False, only_ids=ids,
-                            quiet=True, dates=ids is None)
+                            quiet=True, dates=ids is None, editable=False)
         built.append({"name": name, "path": path, "ids": ids,
                       "size": path.stat().st_size})
     return [(b["name"], b["path"].read_bytes(), "html") for b in built], built

@@ -24,10 +24,14 @@ import json
 import mimetypes
 from pathlib import Path
 
+import marks as marks_mod
+import paths
 import storage
 
 EMBED_BUDGET_MB = 60
 UI_DIR = Path(__file__).resolve().parent / "ui"
+# Rebound as a module name because that's what the tests redirect.
+RUNS_DIR = paths.RUNS_DIR
 
 
 def _template():
@@ -35,6 +39,20 @@ def _template():
     tokens = (UI_DIR / "tokens.css").read_text(encoding="utf-8")
     return html.replace("__TOKENS__", tokens)
 
+
+
+def run_id_for(out):
+    """The run this gallery belongs to, named the way the Past searches tab
+    names it, or None for a file being written anywhere else.
+
+    The page sends this back when you star something, and it's a folder name
+    rather than a path on purpose: a gallery gets emailed, and a full path would
+    carry the sender's home directory to whoever opens it."""
+    try:
+        return (Path(out).resolve().parent
+                .relative_to(Path(RUNS_DIR).resolve()).as_posix())
+    except (ValueError, OSError):
+        return None
 
 
 def embed_images(rows, base_dir, budget_mb=EMBED_BUDGET_MB):
@@ -65,7 +83,7 @@ def embed_images(rows, base_dir, budget_mb=EMBED_BUDGET_MB):
 
 
 def build(csv_in, out=None, embed=True, budget_mb=EMBED_BUDGET_MB, only_ids=None,
-          quiet=False, images=True, dates=True):
+          quiet=False, images=True, dates=True, editable=True):
     """only_ids limits the gallery to those item_ids, which is how the emailed
     "just the new listings" attachment is built from the same CSV.
 
@@ -76,7 +94,13 @@ def build(csv_in, out=None, embed=True, budget_mb=EMBED_BUDGET_MB, only_ids=None
 
     dates=False drops the first-found column, for a gallery whose listings were
     all found by the same run — there, the line says the same thing on every
-    card and so says nothing on any of them."""
+    card and so says nothing on any of them.
+
+    editable=False builds a gallery that shows this run's stars and hides but
+    can't change them. That's what the emailed attachments are: the copy that
+    lands in someone else's mail is a snapshot of what you marked, and a star
+    they clicked on it could never be saved back into a run folder they haven't
+    got. A page with no run id never even looks for the local server."""
     src = Path(csv_in)
     with open(src, newline="", encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
@@ -105,7 +129,21 @@ def build(csv_in, out=None, embed=True, budget_mb=EMBED_BUDGET_MB, only_ids=None
     # "</" must not appear inside a <script> block; escape it in the JSON.
     data = json.dumps(uniq, ensure_ascii=False).replace("</", "<\\/")
     out = Path(out) if out else src.with_name("gallery.html")
-    out.write_text(_template().replace("__DATA__", data), encoding="utf-8")
+    run = run_id_for(out) if editable else None
+    # The marks are read from the run folder even when the page can't change
+    # them, because an emailed attachment is built out of the same folder and
+    # carrying the sender's stars is the whole point of it.
+    here = marks_mod.read(out.parent)
+    # __DATA__ goes in last. A listing's description is arbitrary text off
+    # Facebook, and one containing the literal string __MARKS__ would otherwise
+    # be treated as a token by the substitution after it.
+    page = (_template()
+            .replace("__MARKS__", marks_mod.block_text(here))
+            .replace("__RUN__", json.dumps(run))
+            .replace("__HELPER__", json.dumps(
+                f"http://{marks_mod.HOST}:{marks_mod.PORT}{marks_mod.ENDPOINT}"))
+            .replace("__DATA__", data))
+    out.write_text(page, encoding="utf-8")
     if not quiet:
         print(f"Wrote {out} ({len(uniq)} listings{note}).")
         if not embed:

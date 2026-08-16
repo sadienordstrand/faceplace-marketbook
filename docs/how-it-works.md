@@ -489,15 +489,89 @@ lb winch") from reading as years, and listings with no year sort to the bottom i
 **First-found sorting** works the same way, off the `first_found` column, and is
 offered only by the galleries that have one (see
 [When a listing was first found](#when-a-listing-was-first-found)).
-**Hiding** a card with the cross in its top right corner is remembered by listing
-id in local storage, so it survives sorting, reloads, and even rebuilding the
-file from a later sweep. **Starring** one with the star in the opposite corner
-works the same way, under its own key, and pins the card to the front of whatever
-order the sort produced — a stable sort on starredness, so the chosen order still
-holds within each group. The two are opposite verdicts, so starring a card
-unhides it and hiding one unstars it. Both marks are inline SVG rather than the
-`★`/`✕` characters, which aren't in either of the page's typefaces and so would
-arrive from an OS fallback font at about half the size asked for.
+**Hiding** a card with the cross in its top right corner and **starring** one
+with the star in the opposite corner are both remembered by listing id — see
+[Where stars and hides live](#where-stars-and-hides-live). A star pins the card
+to the front of whatever order the sort produced: a stable sort on starredness,
+so the chosen order still holds within each group. The two are opposite
+verdicts, so starring a card unhides it and hiding one unstars it. Both marks
+are inline SVG rather than the `★`/`✕` characters, which aren't in either of the
+page's typefaces and so would arrive from an OS fallback font at about half the
+size asked for.
+
+### Where stars and hides live
+
+**In the gallery file itself**, in a `<script id="marks">` block, and in
+`marks.json` in the run's folder. Not in the browser's local storage, which is
+where they used to be and which loses them on every axis that matters: a
+different browser, a cleared cache, and above all a file emailed to somebody
+else, who would open it and see none of the sender's marks.
+
+A page can't write to the file it was loaded from — no browser permits it — so
+the writing is done by `src/marks.py` on the Python side, reached over the same
+localhost server that answers the email links. Clicking a star POSTs the whole
+set to `/_marks?run=<folder>`, which saves `marks.json` and then rewrites the
+block inside both `gallery.html` and `lightweight_gallery.html` in that folder.
+Both galleries in a run therefore always agree, and the file on disk is always
+the one you'd want to send someone, with no rebuild step to remember. The page
+batches a burst of clicking into one request a third of a second after the last
+one, so a 60 MB file isn't rewritten per click.
+
+A run id that means nothing to the app answering — the original `gallery.html`
+forwarded by hand rather than the attachment, opened on someone else's computer
+— gets a 404, and the page treats that like no answer at all. The marks baked
+into the file are replaced only by a reply about the right run, so what the
+sender starred is still on screen.
+
+Marks are **per run**, keyed by the run folder rather than globally by listing
+id. A scheduled search rewrites one folder every time, so its marks carry from
+run to run; a deleted run takes its marks with it. The page carries the folder
+*name*, never a path — a full one would tell whoever you emailed the gallery to
+what your home directory is called.
+
+**The page checks before it takes a click.** On load it asks the server for the
+run's marks; that request doubles as "is the app running?". If nothing answers —
+the app was never opened this session, or this is a gallery someone emailed —
+the two buttons grey out and explain themselves on hover and on click, and the
+marks already in the file are still shown. The rule is that a mark is never
+accepted and then silently lost, which is why the check exists rather than the
+page assuming. `build_gallery.build(editable=False)` bakes that state in
+permanently for the emailed attachments, which have no run id at all.
+
+**A note is only shown when there's something to be done about it.** A run with
+no server says to open the app, and a server that stopped answering mid-session
+says that instead. A gallery with no run id — an emailed copy — gets no sentence
+at all: there's no app on that machine and no folder for it, so every available
+wording is advice its reader can't act on. Those buttons get `cursor:
+not-allowed` and nothing else, the difference being that this one is never going
+to work rather than not working yet. An empty `lockNote` is what suppresses the
+note element and the click-to-explain, so the two stay in step.
+
+**It asks again when you come back to the window**, on `focus` and on
+`visibilitychange`, if the answer was no and there's a run to ask about. Without
+that, following the instruction to open the app changes nothing until you also
+think to reload, and nothing on screen says to. `focus` is the one that matters:
+switching to another *application* and back doesn't hide the tab, so
+`visibilitychange` never fires for the case this exists for. A flag holds off
+overlapping probes, and no run id means it doesn't ask at all.
+
+Because the buttons depend on it, the server is now started when the app window
+opens, not only by `--tick` and `--install`, and `ensure_gallery_server()`
+returns whether it came up. `open_run()` serves the gallery over localhost when
+it did and falls back to `file://` when it didn't, reporting
+`gallery_server_help()` into the Past searches tab in that case. A blocked
+firewall, a taken port and a failed launch are indistinguishable from outside,
+so it leads with the retry that fixes the two nobody can act on and then gives
+the firewall clicks for this OS from `FIREWALL_STEPS`, since "allow it through
+your firewall" is only useful to someone who already knows how.
+
+**Whether a `file://` page may reach localhost at all** is each browser's own
+policy and the assumption the whole feature rests on. Chromium, Firefox and
+WebKit all allow it today; `test_every_browser_engine_on_this_machine_allows_it`
+checks each engine installed on the machine and skips the rest, so `playwright
+install firefox webkit` buys the wider answer. The preflight also carries
+`Access-Control-Allow-Private-Network`, which Chrome is moving towards requiring
+before it will let a public page reach a private address.
 
 ### When a listing was first found
 
@@ -768,11 +842,13 @@ ran the search. Only Gmail's host is special-cased by name;
 
 **The link to the real gallery is a localhost http URL, not a `file://` one.**
 Gmail strips `file://` hrefs before rendering, which left "Open the full
-gallery" looking like ordinary text. `_gallery_url()` writes
+gallery" looking like ordinary text. `gallery_url()` writes
 `http://127.0.0.1:18741/...` instead, which mail clients keep as a real link.
 `--serve-galleries` answers those on this computer only, serving nothing except
-`gallery.html` files under `runs/`. The server is started by every tick and
-by `--install`, and outlives the process that launched it. Clicked from a phone it lands on a connection error, so the sentence beside
+`gallery.html` files under `runs/` and the `/_marks` endpoint described in
+[Where stars and hides live](#where-stars-and-hides-live). The server is started
+by every tick, by `--install` and by the app window opening, and outlives the
+process that launched it. Clicked from a phone it lands on a connection error, so the sentence beside
 it still names the attachments and the Past searches tab — the link is never
 the only way back. A path that can't become a URL at all (a relative one, which
 would resolve against the reader's machine and point somewhere real and wrong)
