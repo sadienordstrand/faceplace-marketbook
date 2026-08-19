@@ -109,14 +109,14 @@ Open the folder and double-click the file for your computer:
 - **Mac:** `Start Faceplace Marketbook (Mac).command`
 
 <details>
-<summary><strong>If Windows won't open it — "Windows protected your PC"</strong></summary>
+<summary><strong>Click here if Windows won't open it — "Windows protected your PC"</strong></summary>
 
 Click **More info**, then **Run anyway**. Windows shows that box for anything it
 downloaded from outside the Microsoft Store.
 
 </details>
 <details>
-<summary><strong>If your Mac won't open it — "Apple could not verify ..."</strong></summary>
+<summary><strong>Click here if your Mac won't open it — "Apple could not verify ..."</strong></summary>
 
 1. Click Done to dismiss the popup warning.
 2. Open **System Settings** → **Privacy & Security**.
@@ -141,6 +141,8 @@ repeat the steps above.
 </details>
 <br>
 
+---
+
 Once you launch the program, a terminal window opens and tells you what it's
 doing.
 
@@ -153,17 +155,8 @@ time after that, it'll start up in a second or two.
 
 ### Step 3 — Add a shortcut on your computer, if you like
 
-The Search Setup window offers this the first time it opens. Select where you
-want it and click **Add shortcut**:
-
-- **Desktop** — an icon called **Faceplace Marketbook** that you double-click to
-  start a search, exactly as the Start file does.
-- **Dock** (Mac) — keeps it in the Dock permanently. It also puts the app in
-  your Applications folder.
-- **Start menu** (Windows) — nothing on screen, but typing "faceplace" finds it.
-
-A shortcut is the only thing any of this puts outside the app's folder. Deleting
-the shortcut will not delete the app itself.
+The Search Setup window offers this the first time it opens. If you like, you can 
+add a shortcut icon to your Desktop, Dock (Mac), or Start menu (Windows).
 
 Visit the Email & Setup tab to create a shortcut later, or to replace a
 shortcut that stopped working because you moved the app's folder.
@@ -193,9 +186,9 @@ your own separate browser — just leave that one window alone.
 
 **Keep your computer turned on.** The app tries to keep your computer awake
 while it works, and it will continue running even if the display turns off to
-save power. However, closing your laptop lid will put it to sleep, unless
-there's an external display connected. Keep your computer plugged in with the
-lid open so that the search doesn't get interrupted.
+save power. However, closing your laptop lid may put it to sleep, depending on 
+your system settings. Keep your computer plugged in with the lid open so that 
+the search doesn't get interrupted.
 
 **You can stop it early.** Press `Control-C` in the terminal to end the search
 at any time, and it will build the gallery with everything it gathered so far.
@@ -222,12 +215,14 @@ same search twice in a day, the second becomes `..._1`. In each folder:
 - **`run.json`** — a record of what was searched and what came back.
 - **`thumbnails/`** — the photos as individual files.
 
-In the gallery you can search the text, filter by which city found it, and sort
-by price, year, or title (A-Z). You can also click any card to see the full
-description, or click **View On Facebook** to open the listing in your browser.
-Hover over a card and click the **✕** in the top right corner to hide listings
-you're not interested in, or the star in the top left to mark a favorite. Your 
-browser remembers what you've hidden or starred even after you close the page.
+In the gallery you can:
+- Search for listings containing certain words
+- Filter listings by which city's radius they were found within
+- Sort by price, year, or title (A-Z)
+- Click any card to see the full description
+- Click **View On Facebook** to open the listing in your browser
+- Click the **✕** in the top right corner of a listing to hide it
+- Click the star in the top left corner to mark a favorite
 
 ---
 
@@ -274,6 +269,8 @@ the old ones pointing at nothing.
 
 </details>
 
+---
+
 <a id="part-1--give-the-app-an-email-password"></a>
 ### Part 1 — Give the app a password to connect to your email
 
@@ -284,15 +281,12 @@ used.
 
 1. Open Faceplace Marketbook, and click the **Email & Setup** tab at the top.
 2. In your web browser:
-   a. Go to **myaccount.google.com** and sign in.
-   b. Click **Security & sign-in** on the left sidebar.
-   c. Find **2-Step Verification**. If it's off, turn it on and follow Google's
-      steps. You can't create an app password without it.
-   d. Back on the Security page, use the search box at the top of the page and
-      type **app passwords**. Click "App passwords" in the list of search
-      results.
-   e. Type a name — **Faceplace Marketbook** is fine — and click **Create**.
-   f. Google shows **a sixteen-letter password**. Leave that window open.
+  - Go to **myaccount.google.com** and sign in.
+  - Click **Security & sign-in** on the left sidebar.
+  - Find **2-Step Verification**. If it's off, turn it on and follow Google's steps. You can't create an app password without it.
+  - Back on the Security page, use the search box at the top of the page and type **app passwords**. Click "App passwords" in the list of search results.
+  - Type a name — **Faceplace Marketbook** is fine — and click **Create**.
+  - Google shows **a sixteen-letter password**. Leave that window open.
 3. Back in the app: type your Gmail address in **Your email address**, and copy
    the sixteen-letter password into **App password**. Spaces don't matter.
 4. Click **Save**, then click **Send a test email**.
